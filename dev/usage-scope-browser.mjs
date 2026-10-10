@@ -17,7 +17,7 @@ export async function usageScopeChecks(browser, storageState, origin, evidence) 
   await call({ Initialize: { config: { project, endpoint: origin, name: `Usage scopes ${project.value}` } } });
   await call({ Change: { input: { project, change: { request: id(), fences: [], reason: 'Usage scope fixture', mutations: ['A', 'B'].map(name => ({ Create: { draft: {
     title: `Scope ${name}`, body: 'Usage must preserve this item', labels: [], archived: false, citations: [],
-    content: { Task: { status: 'Ready', acceptance: ['Navigate actual accounting scopes'], result: null, validation: [] } },
+    content: { Task: { status: 'Ready', acceptance: ['Navigate actual accounting scopes'], result: null, validation: [], recommendation: null } },
   } } })) } } } });
   const detail = async number => (await call({ Read: { input: { project, selection: { ItemDetail: { id: member(number) } } } } })).Detail.view;
   const before = [await detail(1), await detail(2)];

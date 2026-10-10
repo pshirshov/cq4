@@ -14,7 +14,7 @@ export async function editChecks(browser, storageState, origin, evidence) {
   const project = { value: randomUUID() };
   await post({ Initialize: { config: { project, endpoint: origin, name: `Edit ${project.value}` } } });
   const draft = title => ({ title, body: 'Original body', labels: [], archived: false, citations: [],
-    content: { Task: { status: 'Ready', acceptance: ['Keep navigation while saving'], result: null, validation: [] } } });
+    content: { Task: { status: 'Ready', acceptance: ['Keep navigation while saving'], result: null, validation: [], recommendation: null } } });
   await post({ Change: { input: { project, change: { request: { value: randomUUID() }, fences: [], reason: 'Edit fixture',
     mutations: ['Edit A', 'Edit B'].map(title => ({ Create: { draft: draft(title) } })) } } } });
   const other = { value: randomUUID() };

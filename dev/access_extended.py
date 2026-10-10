@@ -19,7 +19,7 @@ def counters(value):
 
 def task(title):
     return {"title": title, "body": "ACCESS_NARRATIVE " + "x" * 4096, "labels": [], "archived": False,
-            "content": {"Task": {"status": "Ready", "acceptance": ["Preserve the exact affected set"], "result": None, "validation": []}}, "citations": []}
+            "content": {"Task": {"status": "Ready", "acceptance": ["Preserve the exact affected set"], "result": None, "validation": [], "recommendation": None}}, "citations": []}
 
 
 class ExtendedAccess:

@@ -8,7 +8,7 @@ const headers = { Authorization: `Bearer ${process.env.CQ_TOKEN}`, 'Content-Type
   'CQ-Protocol-Version': '0.1.0', 'CQ-Session': process.env.CQ_SESSION };
 const id = () => ({ value: randomUUID() });
 const draft = title => ({ title, body: '', labels: [], archived: false, citations: [],
-  content: { Task: { status: 'Ready', acceptance: ['Durable across restart'], result: null, validation: [] } } });
+  content: { Task: { status: 'Ready', acceptance: ['Durable across restart'], result: null, validation: [], recommendation: null } } });
 async function post(path, body) {
   const response = await fetch(origin + path, { method: 'POST', headers, body: JSON.stringify(body) });
   assert.equal(response.status, 200, await response.clone().text());

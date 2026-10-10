@@ -13,7 +13,7 @@ export async function graphChecks(browser, storageState, origin, evidence) {
     const result = await response.json(); assert.equal(result.Failed, undefined); return result;
   }
   const draft = (title, body) => ({ title, body, labels: [], archived: false, citations: [],
-    content: { Task: { status: 'Ready', acceptance: ['Review graph effects'], result: null, validation: [] } } });
+    content: { Task: { status: 'Ready', acceptance: ['Review graph effects'], result: null, validation: [], recommendation: null } } });
   const change = (project, mutations) => post({ Change: { input: { project, change: {
     request: { value: randomUUID() }, mutations, fences: [], reason: 'Graph fixture' } } } });
   const detail = async id => (await post({ Read: { input: { project: id.project, selection: { ItemDetail: { id } } } } })).Detail.view;

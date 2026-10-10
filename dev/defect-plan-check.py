@@ -44,7 +44,7 @@ class DefectPlanningCheck(unittest.TestCase):
         defect["refs"].append({"relation": "Produces", "target": goal["item"]["id"]})
         advance(defect)
         milestone = create("Milestones", {"Milestone": {"status": "Open"}}, goal)
-        task = create("Tasks", {"Task": {"status": "Ready", "acceptance": ["Original tests pass"], "result": None, "validation": []}}, goal)
+        task = create("Tasks", {"Task": {"status": "Ready", "acceptance": ["Original tests pass"], "result": None, "validation": [], "recommendation": None}}, goal)
         goal["refs"] += [{"relation": "Produces", "target": item["item"]["id"]} for item in [milestone, task]]
         advance(goal)
         task["refs"].append({"relation": "PartOf", "target": milestone["item"]["id"]})

@@ -14,7 +14,7 @@ import zio.{Runtime, Task, Unsafe, ZIO}
 
 final class AttachedGatewayLocal extends AnyWordSpec {
   private val LongInterval = Duration.ofSeconds(30)
-  private val InputSchemaBytes = 46400
+  private val InputSchemaBytes = 46700
   private val schemas = new McpSchemas()
   private val project = ProjectId(UUID.fromString("00000000-0000-4000-8000-000000000001"))
 
@@ -223,6 +223,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
       // Measured 2026-10-05: 44,267 bytes; under the generated names and with the bounds, the nine schemas of the release before took 53,917.
       // A deliberate addition to a command raises this bound: 46,107 bytes with the three commands of the governing session's own work (I30).
       // 46,342 bytes with the per-check usage report (I35).
+      // 46,643 bytes with the optional tier recommendation on a Task (I27), which the change schema carries.
       assert(sizes.map(_._2).sum <= InputSchemaBytes, sizes.toString)
     }
 

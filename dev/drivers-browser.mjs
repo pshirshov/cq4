@@ -12,7 +12,7 @@ export async function driversChecks(browser, storageState, origin, evidence) {
   await call({ Initialize: { config: { project, endpoint: origin, name: `Drivers ${project.value}` } } });
   async function create(title) {
     return (await call({ Change: { input: { project, change: { request: { value: randomUUID() }, fences: [], reason: 'Workset browser fixture', mutations: [
-      { Create: { draft: { title, body: '', labels: [], archived: false, citations: [], content: { Task: { status: 'Ready', acceptance: ['Observed'], result: null, validation: [] } } } } }
+      { Create: { draft: { title, body: '', labels: [], archived: false, citations: [], content: { Task: { status: 'Ready', acceptance: ['Observed'], result: null, validation: [], recommendation: null } } } } }
     ] } } } })).Changed.ack.items[0].id;
   }
   const first = await create('First'); await create('Outside');
@@ -90,7 +90,7 @@ export async function driversChecks(browser, storageState, origin, evidence) {
     for (let offset = 0; offset < 61; offset += 64) {
       const mutations = Array.from({ length: Math.min(64, 61 - offset) }, (_, index) => ({ Create: { draft: {
         title: `Paged ${offset + index}`, body: '', labels: [], archived: false, citations: [],
-        content: { Task: { status: 'Ready', acceptance: ['Observed'], result: null, validation: [] } }
+        content: { Task: { status: 'Ready', acceptance: ['Observed'], result: null, validation: [], recommendation: null } }
       } } }));
       await call({ Change: { input: { project, change: { request: { value: randomUUID() }, fences: [], reason: 'Query page fixture', mutations } } } });
     }

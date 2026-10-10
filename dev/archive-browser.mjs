@@ -10,7 +10,7 @@ const headers={'Authorization':`Bearer ${process.env.CQ_TOKEN}`,'CQ-Session':ran
 async function call(command){const response=await fetch(origin+'/api/call',{method:'POST',headers,body:JSON.stringify(command)});assert.equal(response.status,200);return response.json();}
 const project={value:randomUUID()},other={value:randomUUID()};
 for(const p of [project,other])await call({Initialize:{config:{project:p,endpoint:origin,name:'Archive '+p.value}}});
-const draft=(title,status,labels,archived)=>({title,body:'Preserve content',labels,archived,citations:[],content:{Task:{status,acceptance:['Explicit preview'],result:null,validation:[]}}});
+const draft=(title,status,labels,archived)=>({title,body:'Preserve content',labels,archived,citations:[],content:{Task:{status,acceptance:['Explicit preview'],result:null,validation: [], recommendation: null}}});
 const selected=draft('Selected completed','Done',['batch'],false),cancelled=draft('Selected cancelled','Cancelled',['batch'],false);
 const change=mutations=>call({Change:{input:{project,change:{request:{value:randomUUID()},mutations,fences:[],reason:'Archive fixture'}}}});
 const created=await change([selected,cancelled,draft('Active','Ready',['batch'],false),draft('Outside filter','Done',[],false),draft('Already archived','Done',['batch'],true)].map(draft=>({Create:{draft}})));

@@ -6,7 +6,7 @@ export async function draftChecks(browser, storageState, origin, evidence) {
     'CQ-Protocol-Version': '0.1.0', 'Content-Type': 'application/json' };
   const id = () => ({ value: randomUUID() });
   const draft = title => ({ title, body: 'Original body', labels: [], archived: false, citations: [],
-    content: { Task: { status: 'Ready', acceptance: ['Preserve concurrent work'], result: null, validation: [] } } });
+    content: { Task: { status: 'Ready', acceptance: ['Preserve concurrent work'], result: null, validation: [], recommendation: null } } });
   async function call(command) {
     const response = await fetch(origin + '/api/call', { method: 'POST', headers, body: JSON.stringify(command) });
     assert.equal(response.status, 200);

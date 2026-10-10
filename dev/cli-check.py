@@ -101,7 +101,7 @@ def main():
         run(root, "query", "--complete", "0", "--after", "T1", expected=1)
         assert json.loads(run(root, "query", "--roots", ""))["Workset"]["page"]["entries"] == []
         draft = {"title": "CLI workset", "body": "Context", "labels": [], "archived": False,
-                 "content": {"Task": {"status": "Ready", "acceptance": ["Visible"], "result": None, "validation": []}}, "citations": []}
+                 "content": {"Task": {"status": "Ready", "acceptance": ["Visible"], "result": None, "validation": [], "recommendation": None}}, "citations": []}
         command_body = {"Change": {"input": {"project": config["project"], "change": {"request": {"value": str(uuid.uuid4())},
             "mutations": [{"Create": {"draft": draft}}, {"Create": {"draft": draft}}], "fences": [], "reason": "CLI workset"}}}}
         seed = urllib.request.Request(environment["CQ_ORIGIN"] + "/api/call", data=json.dumps(command_body).encode(), headers={

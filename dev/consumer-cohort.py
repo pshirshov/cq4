@@ -32,7 +32,7 @@ def seed(call, project, language, specification):
     goal_draft = draft("Word-frequency consumer", specification + "\n\nIndependent candidate review must execute the configured consumer-oracle check freshly and inspect acceptance separately for each assigned task.",
         {"Goal": {"status": "Open", "outcome": "Deliver the specified consumer", "acceptance": ["Both task scopes independently reviewed"], "scope": language}})
     drafts = [draft(title, "Implement this task's separate acceptance criteria against the complete specification in the goal guidance.",
-        {"Task": {"status": "Ready", "acceptance": acceptance, "result": None, "validation": []}}) for title, acceptance in scopes]
+        {"Task": {"status": "Ready", "acceptance": acceptance, "result": None, "validation": [], "recommendation": None}}) for title, acceptance in scopes]
     goal, *members = change([{"Create": {"draft": value}} for value in [goal_draft, *drafts]])
     for index, member in enumerate(members):
         linked = change([{"Reference": {"source": goal["id"], "expectedSource": goal["revision"], "relation": "Produces",

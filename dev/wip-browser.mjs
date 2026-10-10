@@ -13,7 +13,7 @@ async function post(path, body) {
 }
 const call = command => post('/api/call', command);
 const id = () => ({value: randomUUID()});
-const task = title => ({title, body: title === 'Free' ? 'A long body makes the item view scroll.\n\n'.repeat(60) : '', labels: [], archived: false, citations: [], content: {Task: {status: 'Ready', acceptance: ['Marked'], result: null, validation: []}}});
+const task = title => ({title, body: title === 'Free' ? 'A long body makes the item view scroll.\n\n'.repeat(60) : '', labels: [], archived: false, citations: [], content: {Task: {status: 'Ready', acceptance: ['Marked'], result: null, validation: [], recommendation: null}}});
 const project = id();
 await call({Initialize: {config: {project, endpoint: origin, name: `Work in progress ${project.value}`}}});
 const created = (await call({Change: {input: {project, change: {request: id(), fences: [], reason: 'Work in progress fixture',

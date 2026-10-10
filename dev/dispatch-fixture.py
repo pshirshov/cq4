@@ -447,7 +447,7 @@ def main():
         finish({"summary": "Workflow execution limits denied admission before side effects"})
         return
     draft = {"title": "Consumer fixture", "body": "Implement consumer.txt with the specified contents", "labels": [], "archived": False,
-             "content": {"Task": {"status": "Ready", "acceptance": ["Exact content verified"], "result": None, "validation": []}}, "citations": []}
+             "content": {"Task": {"status": "Ready", "acceptance": ["Exact content verified"], "result": None, "validation": [], "recommendation": None}}, "citations": []}
     if data["request"] == "proposal-workflow":
         draft["labels"] = ["proposal-fixture"]
     if data["request"] == "traffic-growth-bootstrap":

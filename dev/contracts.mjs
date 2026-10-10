@@ -183,10 +183,10 @@ for (const [role, guide] of Object.entries(guides)) {
   assert.equal(references.size, Object.keys(guide.$defs).length);
 }
 const content = validator.getValidator({ ...definitions.cq_api_Content, $defs: definitions });
-assert.equal(content({ Task: { status: 'Ready', acceptance: ['test'], result: null, validation: [] } }).valid, true);
-assert.equal(content({ Task: { status: 'Ready', acceptance: ['test'], validation: [] } }).valid, false);
+assert.equal(content({ Task: { status: 'Ready', acceptance: ['test'], result: null, validation: [], recommendation: null } }).valid, true);
+assert.equal(content({ Task: { status: 'Ready', acceptance: ['test'], validation: [], recommendation: null } }).valid, false);
 assert.equal(content({ status: 'Ready', acceptance: ['test'], validation: [] }).valid, false);
-assert.equal(content({ Task: { status: 'Ready', acceptance: ['test'], validation: [] }, Question: {} }).valid, false);
+assert.equal(content({ Task: { status: 'Ready', acceptance: ['test'], validation: [], recommendation: null }, Question: {} }).valid, false);
 const dispatchSchema = definitions.cq_api_DispatchRequest;
 const dispatch = validator.getValidator({ ...dispatchSchema, $defs: definitions });
 const request = fixture(dispatchSchema, definitions);

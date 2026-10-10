@@ -151,7 +151,7 @@ export async function tableChecks(browser, storageState, origin, evidence) {
     const grouping = table.getByRole('checkbox', { name: 'Group by milestone', exact: true });
     await check('I15 milestone cells show M<n> for members only, without controls', async () => {
       await change([...['Later', 'Sooner'].map(title => ({ Create: { draft: { ...draft, title, content: { Milestone: { status: 'Open', objective: 'Group rows' } } } } })),
-        ...['One', 'Two', 'Three', 'Four'].map(title => ({ Create: { draft: { ...draft, title, content: { Task: { status: 'Ready', acceptance: ['Listed'], result: null, validation: [] } } } } }))]);
+        ...['One', 'Two', 'Three', 'Four'].map(title => ({ Create: { draft: { ...draft, title, content: { Task: { status: 'Ready', acceptance: ['Listed'], result: null, validation: [], recommendation: null } } } } }))]);
       await change([membership(1, 1, 2, 1, true), membership(2, 1, 1, 1, true)]); await change([membership(4, 1, 1, 2, true)]);
       await table.getByRole('button', { name: 'Sort by ID', exact: true }).click(); await sorted(0, 'ascending');
       await search('ledger:Tasks'); await shows(['T1', 'T2', 'T3', 'T4']);
@@ -185,7 +185,7 @@ export async function tableChecks(browser, storageState, origin, evidence) {
     });
     await check('I15 live updates move rows between groups without duplicating headers', async () => {
       await change([membership(3, 1, 2, 2, true)]); await shows(['#M1', 'T2', 'T4', '#M2', 'T1', 'T3']);
-      await change([membership(3, 2, 2, 3, false), { Create: { draft: { ...draft, title: 'Five', content: { Task: { status: 'Ready', acceptance: ['Listed'], result: null, validation: [] } } } } }]);
+      await change([membership(3, 2, 2, 3, false), { Create: { draft: { ...draft, title: 'Five', content: { Task: { status: 'Ready', acceptance: ['Listed'], result: null, validation: [], recommendation: null } } } } }]);
       await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#—', 'T3', 'T5']);
       assert.deepEqual(await table.locator('tbody td.item-milestone').allTextContents(), ['M1', 'M1', 'M2', '', '']);
     });

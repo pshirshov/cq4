@@ -13,7 +13,7 @@ export async function scrollChecks(browser, storageState, origin, evidence) {
   }
   const project = { value: randomUUID() };
   const draft = title => ({ title, body: 'Scrolling fixture', labels: [], archived: false, citations: [],
-    content: { Task: { status: 'Ready', acceptance: ['Append results without losing context'], result: null, validation: [] } } });
+    content: { Task: { status: 'Ready', acceptance: ['Append results without losing context'], result: null, validation: [], recommendation: null } } });
   const change = mutations => post({ Change: { input: { project, change: { request: { value: randomUUID() }, fences: [], reason: 'Scrolling fixture', mutations } } } });
   await post({ Initialize: { config: { project, endpoint: origin, name: `Scrolling ${project.value}` } } });
   const created = [];

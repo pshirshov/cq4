@@ -162,7 +162,7 @@ def main():
                 refresh = name == "refresh"
                 priced = name == "mixed"
                 draft = {"title": "Cohort task", "body": "Create consumer.txt", "labels": ["cohort-selected-" + name],
-                         "archived": False, "content": {"Task": {"status": "Ready", "acceptance": ["Exact content verified"], "result": None, "validation": []}}, "citations": []}
+                         "archived": False, "content": {"Task": {"status": "Ready", "acceptance": ["Exact content verified"], "result": None, "validation": [], "recommendation": None}}, "citations": []}
                 goal, *members = change([{"Create": {"draft": {**draft, "labels": [], "content": {"Goal": {
                     "status": "Open", "outcome": "Shared parser", "acceptance": ["Independent task acceptance"], "scope": "Consumer"}}}}},
                     *[{"Create": {"draft": draft}} for _ in range(2)]])
@@ -209,7 +209,7 @@ def main():
             for blocked in [False, True]:
                 name = "claimed-pool" if blocked else "fairness"
                 draft = {"title": "Independent task", "body": "Inspect this independent requirement", "labels": [], "archived": False,
-                         "content": {"Task": {"status": "Ready", "acceptance": ["Separate observation"], "result": None, "validation": []}}, "citations": []}
+                         "content": {"Task": {"status": "Ready", "acceptance": ["Separate observation"], "result": None, "validation": [], "recommendation": None}}, "citations": []}
                 members = change([{"Create": {"draft": draft}} for _ in range(32)])
                 free = None
                 if blocked:

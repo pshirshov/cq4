@@ -228,7 +228,7 @@ def main():
             assert whole["context"]["instructions"] == begin_text and whole["operatorRequirements"] == first["Workflow"]["operatorRequirements"], whole
             peer.tool("session", {"Workflow": {"id": first["Workflow"]["id"], "request": {"Advance": {"roots": [], "through": "Explore"}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}, denied=True)
             draft = {"title": "Attached investigation", "body": "Investigate the fixture", "labels": ["proposal-fixture"], "archived": False,
-                     "content": {"Task": {"status": "Ready", "acceptance": ["Report findings"], "result": None, "validation": []}}, "citations": []}
+                     "content": {"Task": {"status": "Ready", "acceptance": ["Report findings"], "result": None, "validation": [], "recommendation": None}}, "citations": []}
             created = peer.tool("change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": draft}}], "fences": [], "reason": "Attached fixture"}})["Changed"]["ack"]["items"][0]
             selection["roots"] = [created["id"]]
             choice, = peer.tool("dispatch", {"Select": {"request": selection}})["Selection"]["value"]["choices"]

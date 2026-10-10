@@ -13,7 +13,7 @@ async function call(command) {
 }
 const draft = (kind, number) => ({title: `${kind} ${number}`, body: '', labels: [], archived: false, citations: [], content: kind === 'Question'
   ? {Question: {status: 'Open', prompt: `Choose ${number}`, context: 'Review race', alternatives: [], recommendation: null, answer: null}}
-  : {Task: {status: 'Ready', acceptance: ['Review race'], result: null, validation: []}}});
+  : {Task: {status: 'Ready', acceptance: ['Review race'], result: null, validation: [], recommendation: null}}});
 const change = (project, mutations) => call({Change: {input: {project, change: {request: {value: randomUUID()}, mutations, fences: [], reason: 'Race fixture'}}}});
 const browser = await chromium.launch({headless: true}); const cases = [], failures = [];
 try {

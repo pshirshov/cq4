@@ -83,7 +83,7 @@ const assigned = await operator({ Agents: { input: { project, action: { Replace:
 assert.deepEqual([assigned.Agents.value.project.revision, assigned.Agents.value.project.problems], [{ value: "1" }, []]);
 assert(!("routes" in context), "The session is told no models to choose");
 const draft = { title: "Driven task", body: "Advance the fixture", labels: [], archived: false,
-  content: { Task: { status: "Ready", acceptance: ["Report findings"], result: null, validation: [] } }, citations: [] };
+  content: { Task: { status: "Ready", acceptance: ["Report findings"], result: null, validation: [], recommendation: null } }, citations: [] };
 const change = (pi, mutations, fences) => pi.tool("change", { project, change: { request: identity(), mutations, fences, reason: "Pi driver fixture" } });
 const detail = async id => (await first.tool("read", { project, selection: { ItemDetail: { id } } })).Detail.view.item;
 const [target, outsider, other, milestone] = (await change(first, [{ Create: { draft } }, { Create: { draft } }, { Create: { draft } },

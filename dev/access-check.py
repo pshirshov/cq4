@@ -242,7 +242,7 @@ ANALYZE cq_items;
 
 def draft(title: str):
     return {"title": title, "body": "padding", "labels": ["seed"], "archived": False,
-            "content": {"Task": {"status": "Ready", "acceptance": ["Measured"], "result": None, "validation": []}}, "citations": []}
+            "content": {"Task": {"status": "Ready", "acceptance": ["Measured"], "result": None, "validation": [], "recommendation": None}}, "citations": []}
 
 
 def item_id(project: dict, number: int):

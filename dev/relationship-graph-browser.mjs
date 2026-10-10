@@ -23,7 +23,7 @@ await change(Array.from({ length: 19 }, (_, index) => ({ Create: { draft: {
   title: index === 0 ? ROOT_TITLE : index === 1 ? 'Prerequisite <script>literal</script>'
     : `Related work ${index + 1}${index >= 4 && index < 12 ? LONG_SUFFIX : ''}`,
   body: 'Graph fixture', labels: [], archived: false, citations: [],
-  content: { Task: { status: 'Ready', acceptance: ['Read-only graph'], result: null, validation: [] } },
+  content: { Task: { status: 'Ready', acceptance: ['Read-only graph'], result: null, validation: [], recommendation: null } },
 } } })));
 for (let number = 2; number <= 17; number++) {
   const root = await detail(1); const target = await detail(number);

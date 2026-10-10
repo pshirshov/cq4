@@ -13,7 +13,7 @@ const first = { value: randomUUID() };
 const second = { value: randomUUID() };
 const id = () => ({ value: randomUUID() });
 const draft = title => ({ title, body: 'Markdown λ', labels: [], archived: false,
-  content: { Task: { status: 'Ready', acceptance: ['Observable outcome'], result: null, validation: [] } }, citations: [] });
+  content: { Task: { status: 'Ready', acceptance: ['Observable outcome'], result: null, validation: [], recommendation: null } }, citations: [] });
 const change = title => ({ project: first, change: { request: id(), mutations: [{ Create: { draft: draft(title) } }], fences: [], reason: 'Actual client test' } });
 const post = (path, body, credentials) => fetch(`${origin}${path}`, { method: 'POST', headers: credentials, body: JSON.stringify(body) });
 async function call(command, credentials) {

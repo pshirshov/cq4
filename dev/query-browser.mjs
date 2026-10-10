@@ -15,9 +15,9 @@ export async function queryChecks(browser, storageState, origin, evidence) {
   for (const id of [project, other]) await post({ Initialize: { config: { project: id, endpoint: origin, name: `Query ${id.value}` } } });
   await post({ Change: { input: { project, change: { request: { value: randomUUID() }, fences: [], reason: 'Query browser fixture', mutations: [
     { Create: { draft: { title: 'Completion target', body: 'Query popup fixture', labels: [], archived: false, citations: [],
-      content: { Task: { status: 'Ready', acceptance: ['Query navigation'], result: null, validation: [] } } } } },
+      content: { Task: { status: 'Ready', acceptance: ['Query navigation'], result: null, validation: [], recommendation: null } } } } },
     { Create: { draft: { title: 'Archived target', body: 'Query archive fixture', labels: [], archived: true, citations: [],
-      content: { Task: { status: 'Done', acceptance: ['Query navigation'], result: null, validation: [] } } } } },
+      content: { Task: { status: 'Done', acceptance: ['Query navigation'], result: null, validation: [], recommendation: null } } } } },
   ] } } } });
   const context = await browser.newContext({ storageState });
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true });

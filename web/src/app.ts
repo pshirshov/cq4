@@ -760,7 +760,7 @@ class App {
     const project = this.currentProject();
     const key = `cq-draft:${project.value}:${base === null ? 'new' : itemName(base.item.id)}`;
     const initial = base === null ? api.ItemDraft_JsonCodec.instance.decode(CONTEXT, { title: '', body: '', labels: [], archived: false,
-      content: { Task: { status: 'Ready', acceptance: [''], result: null, validation: [] } }, citations: [] }) : base.item.draft;
+      content: { Task: { status: 'Ready', acceptance: [''], result: null, validation: [], recommendation: null } }, citations: [] }) : base.item.draft;
     let record = new api.BrowserDraft(project, base === null ? undefined : new api.ItemRevision(base.item.id, base.item.revision), initial, undefined);
     const saved = localStorage.getItem(key);
     if (saved !== null) {

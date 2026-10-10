@@ -13,7 +13,7 @@ export async function workspaceChecks(browser, storageState, origin, evidence) {
   const project = { value: randomUUID() };
   await post({ Initialize: { config: { project, endpoint: origin, name: `Workspace ${project.value}` } } });
   const draft = title => ({ title, body: 'Workspace interaction fixture', labels: [], archived: false, citations: [],
-    content: { Task: { status: 'Ready', acceptance: ['Keep keyboard context during updates'], result: null, validation: [] } } });
+    content: { Task: { status: 'Ready', acceptance: ['Keep keyboard context during updates'], result: null, validation: [], recommendation: null } } });
   const change = mutations => post({ Change: { input: { project, change: { request: { value: randomUUID() }, fences: [], reason: 'Workspace fixture', mutations } } } });
   const created = await change(['Keyboard A', 'Keyboard B'].map(title => ({ Create: { draft: draft(title) } })));
   const context = await browser.newContext({ storageState, viewport: { width: 1440, height: 900 } });

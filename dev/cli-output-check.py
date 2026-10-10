@@ -54,7 +54,7 @@ def main():
                 return result
 
         draft = {"title": "Readable task", "body": "", "labels": [], "archived": False, "citations": [],
-                 "content": {"Task": {"status": "Ready", "acceptance": ["Readable output"], "result": None, "validation": []}}}
+                 "content": {"Task": {"status": "Ready", "acceptance": ["Readable output"], "result": None, "validation": [], "recommendation": None}}}
         call("/api/call", {"Change": {"input": {"project": project, "change": {"request": {"value": str(uuid.uuid4())}, "fences": [],
              "reason": "CLI output fixture", "mutations": [{"Create": {"draft": draft}}, {"Create": {"draft": {**draft, "title": "Next task"}}}]}}}})
         page = run("human-query", ["query", "--limit", "1"], 0, False).stdout

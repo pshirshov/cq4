@@ -13,7 +13,7 @@ export async function resyncChecks(browser, storageState, origin, evidence) {
   }
   const project = { value: randomUUID() };
   const draft = title => ({ title, body: 'Snapshot fixture', labels: [], archived: false, citations: [],
-    content: { Task: { status: 'Ready', acceptance: ['Resnapshot a stale continuation'], result: null, validation: [] } } });
+    content: { Task: { status: 'Ready', acceptance: ['Resnapshot a stale continuation'], result: null, validation: [], recommendation: null } } });
   const change = mutations => post({ Change: { input: { project, change: { request: { value: randomUUID() }, fences: [], reason: 'Resync fixture', mutations } } } });
   await post({ Initialize: { config: { project, endpoint: origin, name: `Resync ${project.value}` } } });
   const created = await change(Array.from({ length: 50 }, (_, index) => ({ Create: { draft: draft(`Snapshot ${index + 1}`) } })));

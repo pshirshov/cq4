@@ -46,8 +46,8 @@ class ProcessReopeningCheck(unittest.TestCase):
         fixture = json.loads(json.dumps(fixture).replace('"Handoffs"', '"Tasks"'))
         before, after = fixture["before"], fixture["after"]
         old, ready = before["views"][0], after["views"][0]
-        old["item"]["draft"].update(title="count words", citations=[], content={"Task": {"status": "Done", "acceptance": ["Tests cover empty input"], "result": "previous", "validation": []}})
-        ready["item"]["draft"].update(title="count words", citations=[], content={"Task": {"status": "Ready", "acceptance": ["Tests cover empty input"], "result": None, "validation": []}})
+        old["item"]["draft"].update(title="count words", citations=[], content={"Task": {"status": "Done", "acceptance": ["Tests cover empty input"], "result": "previous", "validation": [], "recommendation": None}})
+        ready["item"]["draft"].update(title="count words", citations=[], content={"Task": {"status": "Ready", "acceptance": ["Tests cover empty input"], "result": None, "validation": [], "recommendation": None}})
         before["histories"][0]["page"]["entries"][0]["item"] = copy.deepcopy(old)
         after["histories"][0]["page"]["entries"] = [{**after["histories"][0]["page"]["entries"][0], "item": copy.deepcopy(ready)}, *copy.deepcopy(before["histories"][0]["page"]["entries"])]
         fixture["artifacts"]["plan"]["body"]["report"]["Plan"]["proposal"]["mutations"][0]["Replace"]["draft"] = copy.deepcopy(ready["item"]["draft"])

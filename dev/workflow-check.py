@@ -72,7 +72,7 @@ def main():
 
         def task(labels):
             return change([{"Create": {"draft": {"title": "Workflow task", "body": "Selected work", "labels": labels, "archived": False,
-                "content": {"Task": {"status": "Ready", "acceptance": ["Verified"], "result": None, "validation": []}}, "citations": []}}}])[0]
+                "content": {"Task": {"status": "Ready", "acceptance": ["Verified"], "result": None, "validation": [], "recommendation": None}}, "citations": []}}}])[0]
 
         def denied(name, member, roots, phase, work):
             source.write_text("workflow-denial:" + json.dumps({"members": [member], "work": work, "previous": None,

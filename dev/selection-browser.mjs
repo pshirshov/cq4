@@ -16,7 +16,7 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
     const project = id();
     await post('/api/call', { Initialize: { config: { project, endpoint: origin, name } } });
     const mutations = titles.map(title => ({ Create: { draft: { title, body: 'Selection reply fixture', labels: [], archived: false, citations: [],
-      content: { Task: { status: 'Ready', acceptance: ['Keep response ownership'], result: null, validation: [] } } } } }));
+      content: { Task: { status: 'Ready', acceptance: ['Keep response ownership'], result: null, validation: [], recommendation: null } } } } }));
     const result = await post('/api/call', { Change: { input: { project,
       change: { request: id(), mutations, fences: [], reason: 'Selection fixture' } } } });
     return { project, members: result.Changed.ack.items.map(item => item.id) };

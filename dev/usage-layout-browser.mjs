@@ -17,7 +17,7 @@ export async function usageLayoutChecks(browser, storageState, origin, evidence)
   await call({ Initialize: { config: { project, endpoint: origin, name: `Usage layout ${project.value}` } } });
   await call({ Change: { input: { project, change: { request: id(), fences: [], reason: 'Usage layout fixture', mutations: ['A', 'B', 'C'].map(name => ({ Create: { draft: {
     title: `Layout ${name}`, body: 'Usage layout fixture', labels: [], archived: false, citations: [],
-    content: { Task: { status: 'Ready', acceptance: ['Read the usage tables'], result: null, validation: [] } },
+    content: { Task: { status: 'Ready', acceptance: ['Read the usage tables'], result: null, validation: [], recommendation: null } },
   } } })) } } } });
   const observed = n => ({ value: String(n), measurement: 'Observed' });
   const counts = n => ({ input: observed(n), output: observed(0), cacheRead: observed(0), cacheWrite: observed(0), reasoning: observed(0) });

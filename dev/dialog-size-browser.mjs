@@ -19,7 +19,7 @@ const question = (number, context) => ({title: `Question ${number}`, body: `Ques
   Question: {status: 'Open', prompt: `Choose ${number}`, context, alternatives: ['Go', 'Python'], recommendation: null, answer: null},
 }});
 const task = title => ({title, body: 'Task body', labels: [], archived: false, citations: [],
-  content: {Task: {status: 'Ready', acceptance: ['Accept'], result: null, validation: []}}});
+  content: {Task: {status: 'Ready', acceptance: ['Accept'], result: null, validation: [], recommendation: null}}});
 
 async function fixture(name) {
   const project = id();

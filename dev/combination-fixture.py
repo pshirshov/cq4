@@ -126,7 +126,7 @@ def main():
         raise AssertionError(f"{tag} did not settle")
 
     draft = {"title": actor + " combination fixture", "body": json.dumps(task), "labels": [], "archived": False,
-        "content": {"Task": {"status": "Ready", "acceptance": ["Both independent changes survive"], "result": None, "validation": []}}, "citations": []}
+        "content": {"Task": {"status": "Ready", "acceptance": ["Both independent changes survive"], "result": None, "validation": [], "recommendation": None}}, "citations": []}
     # Implementation and conflict resolution are admitted only for Tasks under a milestone.
     member, milestone = tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": draft}}, {"Create": {"draft": {
         "title": actor + " combination milestone", "body": "", "labels": [], "archived": False, "citations": [],
