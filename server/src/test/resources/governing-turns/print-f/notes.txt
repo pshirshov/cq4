@@ -1,0 +1,2 @@
+background command woke the session (a second result event): True
+started t_ms=1791581371375.861 exited t_ms=1791581378707.596

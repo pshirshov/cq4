@@ -1,0 +1,115 @@
+78
+ ▐▛███▛█Claude Codev2.1.295
+▝▜██████▀Opus 5.5 · API Usage Billing
+ ▝▝   ▝▝ /tmp/gt/cap/interactive-b/work
+◐ medium · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+⏸ manual mode on · ? for shortcuts · ← for agents
+█▜ 
+ ▛▌
+ ▝▛ 
+ ▘▘▘▘
+▐█▛▜ 
+ ▐ 
+▝▝▝▝ 
+ █▛▌
+ ▌
+ ▘ ▘
+▐█ 
+▐ 
+▝▝ 
+█▌
+█▌
+▘ ▘
+▐█
+▐█
+▝▝▝▝
+█▌
+▝█▛
+▘▘ ▘▘
+▐█
+▝▜█▀
+▝▝ ▝▝
+ ▌
+ ▝▛ 
+ ▘▘▘▘
+▐ 
+ ▐ 
+▝▝▝▝ 
+ ▌
+ ▌
+ ▘ ▘
+▐ 
+▐ 
+▝▝ 
+▛▌
+█▌
+▘ ▘
+▐▜▛█
+▐█
+▝▝▝▝
+▛██▛▌
+▝█▛
+▘▘ ▘▘
+▐█▜█
+▝▜█▀
+▝▝ ▝▝
+▛ 
+Runtheshellcommand`sleep2`withtheBashtool,thenreplywiththeworddone.[stub:sleep] 
+
+❯ Run the shell command sleep 2 with the Bash tool, then reply with the word done. [stub:sleep]                         
+✶Computing… (running UserPromptSubmit hook · 0s)
+❯  
+ · esc to interrupt · ← for agents
+
+ Sleepingtwoseconds
+  ⎿  $ sleep 2
+*alculating… (running PreToolUse hook · 0s · ↓2 tokens)
+●
+✢0s · ↓ 3 tokens)
+·Calculating…5
+6
+8
+Calculating…10 tokens)
+ 
+✢1
+3
+*15
+✶
+✻
+✽
+●
+Calculating…
+✻Calculating…
+✶
+ 
+2
+*
+✢
+running PostToolUse hook · 2s · ↓15 tokens)
+·Calculating…
+Batc hook· 2s· ↓ 15 tokens)
+2s · ↓ 15 tokens)
+Calculating…
+●
+7
+ Ran 1 shell command 
+
+Calculating…running Stop hook · 2s · ↓17 tokens)
+✢9
+●Stubanswer(invented):thetoolcallfinished.
+✻Sautéed for 2s · done 10:30 PM
+
+❯ 
+? for shortcuts · ← for agents
+❯ /exit                       Exit the CLI
+  /context                    Visualize current context usage as a colored grid
+/exit 
+7878
+
+Resume this session with:
+
+claude --resume 4a5a1ca9-837e-416a-9805-065631412d30
+

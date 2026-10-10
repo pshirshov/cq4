@@ -1,0 +1,47 @@
+78
+ ▐▛███▛█Claude Codev2.1.295
+▝▜██████▀Opus 5.5 · API Usage Billing
+ ▝▝   ▝▝ /tmp/gt/cap/interactive-e/work
+◐ medium · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+⏸ manual mode on · ? for shortcuts · ← for agents
+▟▟
+█▟█▟
+▟█▟█
+▗▟▛▛▄
+ ▘
+ ▐ 
+▝▀
+Thinkaboutthisforalongwhile,thenreplywiththewordlate.[stub:hold] 
+
+❯ Think about this for a long while, then reply with the word late. [stub:hold]                                         
+✻Creating… (running UserPromptSubmit hook · 0s)
+❯  
+ · esc to interrupt · ← for agents
+✶rt
+
+*
+✢Ca
+·e
+r
+✢C
+*
+✶
+
+
+❯ Thinkaboutthisforalongwhile,thenreplywiththewordlate.[stub:hold] 
+
+Ctrl+Y to paste deleted tex
+ 
+ · ? for shortcuts · ← for agents
+❯ /exit                       Exit the CLI
+  /context                    Visualize current context usage as a colored grid
+/exit 
+7878
+
+Resume this session with:
+
+claude --resume 2261f588-9216-4210-b53c-0104e5d51b94
+

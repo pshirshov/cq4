@@ -1,0 +1,1 @@
+/nix/store/32g45z0w0raaidc7fhdkfkhvjj4a2kxa-claude-code-no-autoupdate/bin/claude --settings /tmp/gt/cap/print-g/settings.json --model claude-opus-5-5 --allowedTools Bash,Task,Agent --permission-mode default -p --output-format stream-json --verbose Start one subagent with the Task tool and report what it says. [stub:agent]

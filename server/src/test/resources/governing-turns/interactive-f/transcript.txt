@@ -1,0 +1,96 @@
+78
+Claude Codev2.1.295
+Opus 5.5 · API Usage Billing
+/tmp/gt/cap/interactive-f/work
+◐ medium · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+⏸ manual mode on · ? for shortcuts · ← for agents
+█▟
+██▀
+   
+█▟
+██▀
+▝▝ 
+█▟
+██▀
+   
+▟█▟
+██▀
+▝▝ 
+█▟█▟
+██▀
+▝   
+▐█▟█▟
+▜██▀
+ ▝▝ 
+ ▐█▟█▟
+▝▜██▀
+▝▝ ▝ 
+▛█▛█
+▂▂
+▛▛
+◐ medium · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Start the shell command `sleep 6; echo bg-done` in the background with the Bash tool (run_in_background), then end
+  yourturn.[stub:bg] 
+
+❯ Start the shell command sleep 6; echo bg-done in the background with the Bash tool (run_in_background), then end your 
+  turn. [stub:bg]                                                                                                       
+✶Considering… (running UserPromptSubmit hook · 0s)
+                                                                                                    ◐ medium · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+ · esc to interrupt · ← for agents
+ Running1shellcommand…
+  ⎿  $ sleep 6; echo bg-done
+Nucleating… (runing PreToolUse hook ·0s)
+Background sleep
+●
+* · ↓7 tokens)
+✢11 tokens)
+0s · ↓ 11 tokens)
+running PostToolUse hook · 0s · ↓11 tokens)
+1 shell · sc tointerrupt · ← for agents · ↓ to manage
+·Nucleating…2
+Batc hook· 0s· ↓ 12 tokens)
+0s · ↓ 12 tokens)
+Nucleating…
+4
+Nl6
+ Ran 1 shell command 
+
+Nucleating…running Stop hook · 0s · ↓16 tokens)
+●Stubanswer(invented):thetoolcallfinished.
+Nucleating…22
+✻Baked for 0s · done 10:30 PM · 1 shell still running
+
+❯ 
+← for agents · ↓to manage
+
+✢Quantumizing… 
+  ⎿  Tip: Start with small features or bug fixes, tell Claude to propose a plan, and verify its suggested edits
+❯ 
+esc to interrupt · ← foragents
+·mi(running UserPromptSubmit hook · 0s)
+●Backgroundcommand"backgroundsleep"completed(exitcode0)
+
+
+uz(0s · ↓2 tokens)
+Quantumizing…running Sp hook · 0s · ↓2 tokens)
+●Stubanswer(invented):done.
+✻Churned for 0s · done 10:30 PM
+
+
+❯ 
+? for shortcuts · ← for agents
+❯ /exit                       Exit the CLI
+  /context                    Visualize current context usage as a colored grid
+/exit 
+7878
+
+Resume this session with:
+
+claude --resume 7a28b4e7-224b-4426-ac9a-f632598f3198
+

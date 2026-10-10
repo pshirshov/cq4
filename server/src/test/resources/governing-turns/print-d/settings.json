@@ -1,0 +1,334 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl PreToolUse"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl PostToolUse"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl PostToolUseFailure"
+          }
+        ]
+      }
+    ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl PostToolBatch"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl Notification"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl UserPromptSubmit"
+          }
+        ]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl UserPromptExpansion"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl SessionStart"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl SessionEnd"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl Stop"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl StopFailure"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl SubagentStart"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl SubagentStop"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl PreCompact"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl PostCompact"
+          }
+        ]
+      }
+    ],
+    "PreModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl PreModelSwitch"
+          }
+        ]
+      }
+    ],
+    "PostModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl PostModelSwitch"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl PermissionRequest"
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl PermissionDenied"
+          }
+        ]
+      }
+    ],
+    "Setup": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl Setup"
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl TeammateIdle"
+          }
+        ]
+      }
+    ],
+    "TaskCreated": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl TaskCreated"
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl TaskCompleted"
+          }
+        ]
+      }
+    ],
+    "Elicitation": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl Elicitation"
+          }
+        ]
+      }
+    ],
+    "ElicitationResult": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl ElicitationResult"
+          }
+        ]
+      }
+    ],
+    "ConfigChange": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl ConfigChange"
+          }
+        ]
+      }
+    ],
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl WorktreeCreate"
+          }
+        ]
+      }
+    ],
+    "WorktreeRemove": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl WorktreeRemove"
+          }
+        ]
+      }
+    ],
+    "InstructionsLoaded": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl InstructionsLoaded"
+          }
+        ]
+      }
+    ],
+    "CwdChanged": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl CwdChanged"
+          }
+        ]
+      }
+    ],
+    "FileChanged": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl FileChanged"
+          }
+        ]
+      }
+    ],
+    "DirectoryAdded": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl DirectoryAdded"
+          }
+        ]
+      }
+    ],
+    "MessageDisplay": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3 /srv/nvme/tmp/cq4-interactive-sessions/82cb4e83-339b-444d-926d-c50ff56f49f7/workspaces/9007546f-a0ff-4cd9-a349-e25626fea673/tree/server/src/test/resources/governing-turns/hook.py /tmp/gt/cap/print-d/hooks.jsonl MessageDisplay"
+          }
+        ]
+      }
+    ]
+  }
+}

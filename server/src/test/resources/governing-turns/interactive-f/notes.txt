@@ -1,0 +1,2 @@
+session started (SessionStart seen): True
+a second Stop after the first (the background command's exit woke the session): True

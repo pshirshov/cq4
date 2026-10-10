@@ -1,0 +1,2 @@
+{"seq": 1, "path": "/v1/messages?beta=true", "model": "claude-haiku-5-5", "stream": true, "tools": 0, "mode": "hold", "prompt": "<session>\nThink about this for a long while, then reply with the word late. [stub:hold]\n</", "messages": 1, "phase": "arrive", "t_ms": 1791581437279.892}
+{"seq": 2, "path": "/v1/messages?beta=true", "model": "claude-opus-5-5", "stream": true, "tools": 24, "mode": "hold", "prompt": "Think about this for a long while, then reply with the word late. [stub:hold]", "messages": 2, "phase": "arrive", "t_ms": 1791581437280.528}

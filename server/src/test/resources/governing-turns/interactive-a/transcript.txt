@@ -1,0 +1,45 @@
+78
+ ▐▛███▛█Claude Codev2.1.295
+▝▜██████▀Opus 5.5 · API Usage Billing
+ ▝▝   ▝▝ /tmp/gt/cap/interactive-a/work
+◐ medium · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+⏸ manual mode on · ? for shortcuts · ← for agents
+  
+  ▝▝
+▝▝  
+  ▝▝
+▝▝  
+  ▝▝
+▗▟▄
+ ▘
+▝▝
+ ▐ 
+▝▀
+Replywiththesinglewordready.[stub:plain] 
+
+❯ Reply with the single word ready. [stub:plain]                                                                        
+✶Drizzling… (running UserPromptSubmit hook · 0s)
+❯  
+ · esc to interrupt · ← for agents
+*
+Whirlpooling… 
+✢lo
+·ro(0s · ↓2 tokens)
+Whirlpooling…running Sp hook · 0s · ↓2 tokens)
+●Stubanswer(invented):done.
+✻Cogitated for 0s · done 10:29 PM
+
+❯ 
+? for shortcuts · ← for agents
+❯ /exit                       Exit the CLI
+  /context                    Visualize current context usage as a colored grid
+/exit 
+7878
+
+Resume this session with:
+
+claude --resume 988cc672-ce7c-48c4-9b18-54a29d881e06
+
