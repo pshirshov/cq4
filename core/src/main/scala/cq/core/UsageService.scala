@@ -26,6 +26,8 @@ trait UsageService[F[_, _]] {
 }
 
 object UsageService {
+  val MaxBlocked: Int = AwaitedSpans.MaxBlocked
+
   final class Impl[F[+_, +_]: Error2](repository: UsageRepository[F], ledger: LedgerService[F], clock: Clock) extends UsageService[F] {
     import LedgerPolicy.invalid
     private val MaxIdentity = 300
@@ -83,6 +85,7 @@ object UsageService {
       invalid(!value.parent.contains(value.id), "An attempt cannot parent itself")
       List(value.provider, value.model, value.collector).foreach(text(_, "attempt provider/model/collector"))
       invalid(value.startedAt >= 0, "Invalid attempt start time")
+      invalid(value.phase != UsagePhase.Await, "Waiting on the operator is a host span, not an attempt")
       if (!same(tx.attempt(value.id), value)) tx.putAttempt(value, scope.actor, clock.millis())
       value
     }
@@ -188,12 +191,26 @@ object UsageService {
     override def span(scope: Scope, value: PhaseSpan): F[Throwable, PhaseSpan] = repository.transact(scope.project) { tx =>
       host(scope)
       found(tx.assignment(value.assignment), "Assignment not registered")
-      invalid(HostPhases(value.phase), "A host span is a check, a combination or an integration")
+      invalid(HostPhases(value.phase) || value.phase == UsagePhase.Await, "A host span is a check, a combination, an integration or a wait on the operator")
       invalid(value.check.isEmpty || value.phase == UsagePhase.Check, "Only a check span carries a check name")
       invalid(value.check.forall(name => name.trim.nonEmpty && name.length <= 300 && !name.contains('\u0000')), "A check name is nonblank and at most 300 characters")
-      invalid(value.state != AttemptState.Running && value.startedAt >= 0 && value.finishedAt >= value.startedAt, "Invalid span outcome or times")
-      if (!same(tx.span(value.id), value)) tx.putSpan(value, scope.actor, clock.millis())
-      value
+      invalid(value.startedAt >= 0 && value.finishedAt >= value.startedAt, "Invalid span outcome or times")
+      invalid((value.phase == UsagePhase.Await) == value.await.isDefined, "Only a span of a wait on the operator carries the awaited item, and it must")
+      value.await match {
+        case None =>
+          invalid(value.state != AttemptState.Running, "Invalid span outcome or times")
+          if (!same(tx.span(value.id), value)) tx.putSpan(value, scope.actor, clock.millis())
+          value
+        case Some(wait) =>
+          invalid(wait.item.project == scope.project && wait.blocked.forall(_.project == scope.project), "A wait stays within its authenticated project")
+          invalid(wait.blocked.size <= UsageService.MaxBlocked, "A wait names at most 200 blocked items")
+          invalid(wait.observation >= 1, "An observation number is at least 1")
+          AwaitedSpans.admit(tx.span(value.id), value) match {
+            case AwaitedSpans.Store => tx.putSpan(value, scope.actor, clock.millis()); value
+            case AwaitedSpans.Existing(stored) => stored
+            case AwaitedSpans.Refused(fault) => throw DomainFailure(fault)
+          }
+      }
     }
 
     private def filter(scope: Scope, value: UsageFilter): Unit = value match {
@@ -267,10 +284,10 @@ object UsageService {
       val spans = reader.spans(value).map(tally => tally.phase -> tally).toMap
       PhaseReport(UsagePhase.all.filter(phase => tallies.contains(phase) || spans.contains(phase)).map { phase =>
         val tally = tallies.getOrElse(phase, PhaseTally(0, 0, 0, 0))
-        val span = spans.getOrElse(phase, SpanTally(phase, 0, 0))
-        PhaseUsage(phase, tally.attempts, span.spans, tally.running, tally.open, Math.addExact(tally.wallMillis, span.wallMillis), totals.getOrElse(phase, UsageMath.zeroTotals),
+        val span = spans.getOrElse(phase, SpanTally(phase, 0, 0, 0))
+        PhaseUsage(phase, tally.attempts, span.spans, Math.addExact(tally.running, span.running), tally.open, Math.addExact(tally.wallMillis, span.wallMillis), totals.getOrElse(phase, UsageMath.zeroTotals),
           costs.take(ReadBatch).filter(_.phase == phase).map(_.total))
-      }, costs.size > ReadBatch, reader.cursor)
+      }, costs.size > ReadBatch, reader.truncatedWaits(value), reader.cursor)
     }
 
     override def checks(scope: Scope, value: UsageFilter): F[Throwable, CheckReport] = repository.read(scope.project) { reader =>

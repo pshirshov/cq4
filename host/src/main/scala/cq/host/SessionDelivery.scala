@@ -50,7 +50,8 @@ object SessionDelivery {
       children.exists(child => !has(child, "receipt.json") && (has(child, "publication.json") || !delivered(child.resolve("delivery")))) ||
       checks.exists(check => !has(check, "result.json") || !delivered(check.resolve("delivery"))) ||
       samples.exists(sample => !delivered(sample.resolve("delivery"))) ||
-      entries(directory.resolve("spans")).exists(unacknowledged)
+      entries(directory.resolve("spans")).exists(unacknowledged) ||
+      OperatorWaits.pending(directory, run.project.project)
     SessionRemainder(undelivered, unticketed.size + partialChecks.size + partialSamples.size)
   }
 }
@@ -279,6 +280,7 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
     attached <- (if (run.ownership == SessionOwnership.Attached) ZIO.attemptBlocking(new AttachedUsage(directory, run, clock).recover(api)) else ZIO.succeed(SessionDeliveryReport(0, Nil))).either
     codex <- ZIO.attemptBlocking(Using.resource(new AttachedCodexUsage(directory, run, new CodexRollout, clock))(_.recover(api))).either
     spans <- ZIO.attemptBlocking(SessionDeliveryReport(new SpanDelivery(directory.resolve("spans"), run.project.project).flush(api), Nil)).either
-    recovered <- independent(checked ++ delivered.map(_.map(count => SessionDeliveryReport(count, Nil))) ++ List(attached, codex, spans))
+    waits <- ZIO.attemptBlocking(SessionDeliveryReport(OperatorWaits.recover(directory, run.project.project, api), Nil)).either
+    recovered <- independent(checked ++ delivered.map(_.map(count => SessionDeliveryReport(count, Nil))) ++ List(attached, codex, spans, waits))
   } yield SessionDeliveryReport(recovered.map(_.acknowledged).sum, inventory.incompleteTickets ++ recovered.flatMap(_.incompleteTickets))
 }

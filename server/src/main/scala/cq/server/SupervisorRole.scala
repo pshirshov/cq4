@@ -380,8 +380,9 @@ object SupervisorPlugin extends PluginDef {
     make[AttachedProgram]
     make[AttachedGateway]
     make[SessionClaims].from((config: SupervisorConfig, authority: SupervisorAuthority, logger: logstage.IzLogger) => new SessionClaims(config.owner, authority.governor, logger))
-    make[AwaitedWatch].from((config: SupervisorConfig, authority: SupervisorAuthority, logger: logstage.IzLogger) =>
-      new AwaitedWatch(authority.governor, config.project.project, config.directory, message => logger.warn(s"$message"), config.run.attempt.harness != Harness.Pi))
+    make[AwaitedWatch].from((config: SupervisorConfig, authority: SupervisorAuthority, logger: logstage.IzLogger, clock: Clock) =>
+      new AwaitedWatch(authority.governor, config.project.project, config.directory, message => logger.warn(s"$message"), config.run.attempt.harness != Harness.Pi,
+        Some(new OperatorWaits(config.directory, config.run, authority.collector, clock))))
     make[AttachedWorkflow]
     make[AttachedDriver]
     make[AttachedUsage].from { (config: SupervisorConfig, clock: Clock) => new AttachedUsage(config.directory, config.run, clock) }

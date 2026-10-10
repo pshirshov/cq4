@@ -154,7 +154,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         created <- service.change(owner, request(List(Mutation.Create(task))))
         assignment = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set(created.items.head.id), Attribution.Direct, None, None)
         _ <- usage.assign(host, assignment)
-        span = PhaseSpan(RequestId(UUID.randomUUID()), assignment.id, owner.actor.session, UsagePhase.Check, 1000, 1700, AttemptState.Failed, Some("verify"))
+        span = PhaseSpan(RequestId(UUID.randomUUID()), assignment.id, owner.actor.session, UsagePhase.Check, 1000, 1700, AttemptState.Failed, Some("verify"), None)
         _ <- usage.span(host, span)
         before <- usage.phases(owner, filter)
         _ <- assertIO(before.phases.map(value => (value.phase, value.spans, value.wallMillis)) == List((UsagePhase.Check, 1L, 700L)))
@@ -169,7 +169,50 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         _ <- ZIO.attempt(Files.deleteIfExists(file))
         _ <- assertIO(restored.map(_.entries) == Right(manifest.entries))
         copy <- new PostgresUsageRepository(target).read(owner.project)(reader => (reader.span(span.id), reader.spans(filter), reader.cursor, reader.checks(filter, 200)))
-        _ <- assertIO(copy == (Some(span), List(SpanTally(UsagePhase.Check, 1, 700)), before.cursor, List(CheckTally(Some("verify"), AttemptState.Failed, 1, 700))))
+        _ <- assertIO(copy == (Some(span), List(SpanTally(UsagePhase.Check, 1, 700, 0)), before.cursor, List(CheckTally(Some("verify"), AttemptState.Failed, 1, 700))))
+      } yield ()
+    }
+
+    "round-trip waits on the operator with the awaited item, the blocked items, the flag and the observation number" in {
+      (service: LedgerService[IO], usage: UsageService[IO], config: DatabaseConfig, archives: ProjectArchives) =>
+      val owner = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Governor))
+      val host = owner.copy(actor = owner.actor.copy(role = Role.Collector))
+      val task = ItemDraft("Blocked task", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil), Nil)
+      val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
+      val separator = if (config.url.contains("?")) "&" else "?"
+      val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
+      for {
+        _ <- service.initialize(owner, "archived waits")
+        created <- service.change(owner, request(List(Mutation.Create(task), Mutation.Create(task))))
+        blocked = created.items.head.id
+        other = created.items(1).id
+        governing = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
+        _ <- usage.assign(host, governing)
+        awaited = ItemId(owner.project, Ledger.Questions, 7)
+        running = PhaseSpan(RequestId(UUID.randomUUID()), governing.id, owner.actor.session, UsagePhase.Await, 1000, 1300, AttemptState.Running, None,
+          Some(AwaitedSpan(awaited, Set(blocked), false, 1)))
+        ended = PhaseSpan(RequestId(UUID.randomUUID()), governing.id, owner.actor.session, UsagePhase.Await, 2000, 2500, AttemptState.Cancelled, None,
+          Some(AwaitedSpan(awaited, Set(other), true, 1)))
+        _ <- usage.span(host, running)
+        refreshed = running.copy(finishedAt = 1600, await = running.await.map(value => value.copy(blocked = Set(blocked, other), observation = 2)))
+        _ <- usage.span(host, refreshed)
+        _ <- usage.span(host, ended)
+        before <- usage.phases(owner, UsageFilter.TaskOnly(blocked))
+        _ <- assertIO(before.phases.map(value => (value.phase, value.spans, value.running, value.wallMillis)) == List((UsagePhase.Await, 1L, 1L, 600L)) && before.truncatedWaits == 1)
+        file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+        manifest <- archives.backup(owner.project, file)
+        _ <- assertIO(manifest.entries.exists(entry => entry.table == BackupTable.UsageSpans && entry.rows == 2))
+        _ <- ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
+        })
+        _ <- target.initialize
+        restored <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file).either
+        _ <- ZIO.attempt(Files.deleteIfExists(file))
+        _ <- assertIO(restored.map(_.entries) == Right(manifest.entries))
+        copy <- new PostgresUsageRepository(target).read(owner.project) { reader =>
+          (reader.span(running.id), reader.span(ended.id), reader.spans(UsageFilter.TaskOnly(blocked)), reader.spans(UsageFilter.TaskOnly(other)), reader.truncatedWaits(UsageFilter.TaskOnly(blocked)))
+        }
+        _ <- assertIO(copy == (Some(refreshed), Some(ended), List(SpanTally(UsagePhase.Await, 1, 600, 1)), List(SpanTally(UsagePhase.Await, 2, 1100, 1)), 1L))
       } yield ()
     }
 
