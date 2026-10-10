@@ -418,15 +418,25 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
-    "I27: read a stored Task document by its recommendation field, which the decoder requires to be present" in { (_: LedgerService[IO]) =>
+    "I27: read a stored Task document and a stored proposal written before the recommendation field as Tasks without a recommendation" in { (_: LedgerService[IO]) =>
+      val ctx = baboon.runtime.shared.BaboonCodecContext.Default
       def document(fields: String): io.circe.Json = io.circe.parser.parse(
         s"""{"title":"T","body":"","labels":[],"archived":false,"citations":[],"content":{"Task":{"status":"Ready","acceptance":["a"],"result":null,"validation":[]$fields}}}""").toOption.get
-      def decoded(fields: String) = ItemDraft_JsonCodec.instance.decode(baboon.runtime.shared.BaboonCodecContext.Default, document(fields))
-      // The stored form written before the field existed lacks it; dev/local-update.sql adds it as null to every stored draft, which reads as no recommendation.
-      assertIO(decoded("").isLeft &&
-        decoded(""","recommendation":null""").toOption.exists(_.content == Content.Task(TaskStatus.Ready, List("a"), None, Nil, None)) &&
+      def decoded(fields: String) = ItemDraft_JsonCodec.instance.decode(ctx, document(fields))
+      val none = Content.Task(TaskStatus.Ready, List("a"), None, Nil, None)
+      // Today's stored shape lacks the field; the ledger rows and artifact bodies written so far are not rewritten.
+      def withoutField(json: io.circe.Json): io.circe.Json = json.arrayOrObject(
+        json, items => io.circe.Json.fromValues(items.map(withoutField)),
+        fields => io.circe.Json.fromJsonObject(fields.filterKeys(_ != "recommendation").mapValues(withoutField)))
+      val plain = task("Plain").content
+      val proposal = LedgerProposal(List(ProposedMutation.Create(task("Planned").copy(content = plain.asInstanceOf[Content.Task].copy(recommendation = Some(TierRecommendation(ModelTier.Fast, "r"))))),
+        ProposedMutation.Create(task("Plain"))), "Reason")
+      val stored = withoutField(LedgerProposal_JsonCodec.instance.encode(ctx, proposal))
+      assertIO(decoded("").toOption.exists(_.content == none) &&
+        decoded(""","recommendation":null""").toOption.exists(_.content == none) &&
         decoded(""","recommendation":{"tier":"Fast","reason":"r"}""").toOption.exists(_.content ==
-          Content.Task(TaskStatus.Ready, List("a"), None, Nil, Some(TierRecommendation(ModelTier.Fast, "r")))))
+          Content.Task(TaskStatus.Ready, List("a"), None, Nil, Some(TierRecommendation(ModelTier.Fast, "r")))) &&
+        LedgerProposal_JsonCodec.instance.decode(ctx, stored).toOption.exists(_.mutations.collect { case ProposedMutation.Create(d) => d.content } == List(plain, plain)))
     }
 
     "assign produced tasks to an existing or same-batch milestone and refuse closed milestones and bad indexes" in { (service: LedgerService[IO]) =>

@@ -38,6 +38,13 @@ def scala3_runtime():
                  "def tryConvert[TI <: BaboonGenerated, TO <: BaboonGeneratedLatest: ClassTag]")
 
 
+def optional_task_recommendation():
+    """A Task stored before the field recommendation existed lacks it; it reads as no recommendation, not as a malformed document."""
+    replace_once(ROOT / "generated" / "scala" / "cq" / "api" / "Content.scala",
+                 'recommendation <- getField(jsonObject, "recommendation").flatMap(v => decodeOption(TierRecommendation_JsonCodec.circeDecoder)(v.hcursor))',
+                 'recommendation <- (if (jsonObject.contains("recommendation")) getField(jsonObject, "recommendation").flatMap(v => decodeOption(TierRecommendation_JsonCodec.circeDecoder)(v.hcursor)) else Right(Option.empty[TierRecommendation]))')
+
+
 def main():
     compiler = os.environ.get("CQ_BABOON")
     if compiler is None:
@@ -65,6 +72,7 @@ def main():
         ":openapi", "--output", "generated/openapi",
     ], cwd=ROOT, check=True)
     scala3_runtime()
+    optional_task_recommendation()
     generate_schemas(ROOT)
 
 

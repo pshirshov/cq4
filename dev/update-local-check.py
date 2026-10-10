@@ -255,24 +255,9 @@ class Compatibility(unittest.TestCase):
         self.assertIn(f"SET checksum = '{step['schemaAfter']}' WHERE version = 1 AND checksum = '{step['schemaBefore']}'", sql)
         # A stored span decodes only with check and await present, so the step adds both as null and keeps every other field.
         self.assertIn("UPDATE cq_usage_spans SET body = '{\"check\": null, \"await\": null}'::jsonb || body", sql)
-        # A stored Task decodes only with recommendation present, so the step adds it as null to every Task in a stored draft.
-        self.assertIn("jsonb_set(result, '{Task}', (result->'Task') || '{\"recommendation\": null}'::jsonb)", sql)
-        for table in update.DRAFT_TABLES:
-            self.assertIn(f"UPDATE {table} SET body = pg_temp.with_recommendation(body)", sql)
         tampered = {**step, "sqlSha256": "0" * 64}
         with self.assertRaisesRegex(RuntimeError, "SQL differs from its pinned step"):
             update.data_step(before, after, tampered, ROOT)
-
-    def test_stored_tasks_gain_the_recommendation_as_null(self):
-        task = {"status": "Ready", "acceptance": ["a"], "result": None, "validation": []}
-        stored = {"draft": {"content": {"Task": task}}, "more": [{"Task": {"value": "Done"}}, {"Task": {"Task": task}}]}
-        converted = update.with_recommendation(stored)
-        self.assertEqual(converted["draft"]["content"], {"Task": {**task, "recommendation": None}})
-        self.assertEqual(converted["more"][0], {"Task": {"value": "Done"}})
-        self.assertEqual(converted["more"][1], {"Task": {"Task": {**task, "recommendation": None}}})
-        self.assertEqual(update.with_recommendation(converted), converted)
-        recommended = {"Task": {**task, "recommendation": {"tier": "Fast", "reason": "Mechanical."}}}
-        self.assertEqual(update.with_recommendation(recommended), recommended)
 
     def test_table_entries_compare_without_their_order(self):
         dumps = {"declared": "CREATE TABLE public.t (\n    a text,\n    b text\n);\nCREATE INDEX i ON public.t USING btree (a);\n",

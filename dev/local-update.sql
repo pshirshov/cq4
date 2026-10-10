@@ -29,34 +29,5 @@ INSERT INTO cq_drive_periods(project_id, sequence, drive, harness, session_key, 
   WHERE NOT EXISTS (SELECT 1 FROM cq_drive_periods p WHERE p.project_id = d.project_id AND p.drive = (d.body->'drive'->>'value')::uuid);
 UPDATE cq_usage_spans SET body = '{"check": null, "await": null}'::jsonb || body
   WHERE NOT (jsonb_exists(body, 'check') AND jsonb_exists(body, 'await'));
--- A stored Task decodes only with its optional field recommendation present: each gains it as null wherever a Task is stored in a draft.
-CREATE OR REPLACE FUNCTION pg_temp.with_recommendation(value jsonb) RETURNS jsonb LANGUAGE plpgsql AS $function$
-DECLARE
-  result jsonb;
-BEGIN
-  IF jsonb_typeof(value) = 'array' THEN
-    SELECT COALESCE(jsonb_agg(pg_temp.with_recommendation(element) ORDER BY position), '[]'::jsonb) INTO result
-      FROM jsonb_array_elements(value) WITH ORDINALITY AS entries(element, position);
-    RETURN result;
-  ELSIF jsonb_typeof(value) = 'object' THEN
-    SELECT COALESCE(jsonb_object_agg(key, pg_temp.with_recommendation(member)), '{}'::jsonb) INTO result FROM jsonb_each(value) AS entries(key, member);
-    IF jsonb_typeof(result->'Task') = 'object' AND jsonb_exists(result->'Task', 'acceptance') AND jsonb_exists(result->'Task', 'validation')
-       AND NOT jsonb_exists(result->'Task', 'recommendation') THEN
-      result := jsonb_set(result, '{Task}', (result->'Task') || '{"recommendation": null}'::jsonb);
-    END IF;
-    RETURN result;
-  END IF;
-  RETURN value;
-END
-$function$;
-UPDATE cq_items SET body = pg_temp.with_recommendation(body), summary = pg_temp.with_recommendation(summary)
-  WHERE body IS DISTINCT FROM pg_temp.with_recommendation(body) OR summary IS DISTINCT FROM pg_temp.with_recommendation(summary);
-UPDATE cq_history SET body = pg_temp.with_recommendation(body) WHERE body IS DISTINCT FROM pg_temp.with_recommendation(body);
-UPDATE cq_requests SET body = pg_temp.with_recommendation(body) WHERE body IS DISTINCT FROM pg_temp.with_recommendation(body);
-UPDATE cq_changes SET body = pg_temp.with_recommendation(body) WHERE body IS DISTINCT FROM pg_temp.with_recommendation(body);
-UPDATE cq_result_admissions SET body = pg_temp.with_recommendation(body) WHERE body IS DISTINCT FROM pg_temp.with_recommendation(body);
-UPDATE cq_integrations SET body = pg_temp.with_recommendation(body), hold = pg_temp.with_recommendation(hold)
-  WHERE body IS DISTINCT FROM pg_temp.with_recommendation(body) OR hold IS DISTINCT FROM pg_temp.with_recommendation(hold);
-UPDATE cq_worksets SET body = pg_temp.with_recommendation(body) WHERE body IS DISTINCT FROM pg_temp.with_recommendation(body);
 UPDATE cq_schema_migrations SET checksum = 'e2f614ff501015977c9662dcc48701cfb8b0d93453db89b6a828ef804a2091d6' WHERE version = 1 AND checksum = 'da5a0f6cb21680869d5d40e52f1ee403434ab5a8ab9a33652f6730feb6cf01f1';
 COMMIT;
