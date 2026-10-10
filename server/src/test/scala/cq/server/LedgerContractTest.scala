@@ -16,7 +16,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
   )
 
   private def scope(): Scope = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Governor))
-  private def task(title: String): ItemDraft = ItemDraft(title, "Markdown λ", Set("test"), false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil), Nil)
+  private def task(title: String): ItemDraft = ItemDraft(title, "Markdown λ", Set("test"), false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil, None), Nil)
   private def request(mutations: List[Mutation], fences: List[Fence]): ChangeRequest = ChangeRequest(RequestId(UUID.randomUUID()), mutations, fences, "Contract scenario")
   private def create(service: LedgerService[IO], scope: Scope, draft: ItemDraft): IO[Throwable, ItemRevision] =
     service.change(scope, request(List(Mutation.Create(draft)), Nil)).map(_.items.head)
@@ -172,7 +172,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         Content.Idea(IdeaStatus.Proposed, "Useful outcome", "User motivation"),
         Content.Defect(DefectStatus.Open, Severity.High, "Actual output", "Expected output", "Exact reproduction", None, Nil),
         Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope"),
-        Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil),
+        Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil, None),
         Content.Research(ResearchStatus.Open, "Empirical uncertainty", Nil, None, None),
         Content.Hypothesis(HypothesisStatus.Proposed, "Falsifiable claim", "Rationale", Nil, None),
         Content.Question(QuestionStatus.Open, "Preference?", "Context", List("A", "B"), Some(QuestionRecommendation(0, "A needs no migration")), None),
@@ -249,17 +249,17 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       val owner = scope()
       val invalidDrafts = List(
         task("Fabricated host observation").copy(content = Content.Task(TaskStatus.Ready, List("Acceptance"), None,
-          List(Evidence("Tests passed", EvidenceOrigin.HostObserved, Nil)))),
+          List(Evidence("Tests passed", EvidenceOrigin.HostObserved, Nil)), None)),
         task("Fabricated human report").copy(content = Content.Task(TaskStatus.Ready, List("Acceptance"), None,
-          List(Evidence("User approved", EvidenceOrigin.HumanReported, Nil)))),
+          List(Evidence("User approved", EvidenceOrigin.HumanReported, Nil)), None)),
         task("Empty evidence").copy(content = Content.Task(TaskStatus.Ready, List("Acceptance"), None,
-          List(Evidence("", EvidenceOrigin.ModelDeclared, Nil)))),
+          List(Evidence("", EvidenceOrigin.ModelDeclared, Nil)), None)),
         task("Invalid URL").copy(citations = List(Citation.Url("javascript:alert(1)"))),
         task("Empty file path").copy(citations = List(Citation.File("", None))),
         task("Invalid commit").copy(citations = List(Citation.Commit("consumer", "not-a-commit"))),
         task("Missing reviewed revision").copy(content = Content.Review(ReviewStatus.Pending,
           List(ReviewedItem(ItemId(owner.project, Ledger.Tasks, 999), Revision(1))), None, Nil, None)),
-        task("Oversized optional narrative").copy(content = Content.Task(TaskStatus.Ready, List("Acceptance"), Some("x" * 65537), Nil)),
+        task("Oversized optional narrative").copy(content = Content.Task(TaskStatus.Ready, List("Acceptance"), Some("x" * 65537), Nil, None)),
       )
       for {
         _ <- service.initialize(owner, "nested validation")
@@ -269,7 +269,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(snapshot.items.isEmpty && snapshot.cursor.value == 0)
         human = owner.copy(actor = owner.actor.copy(role = Role.Human))
         accepted = task("Human report").copy(content = Content.Task(TaskStatus.Ready, List("Acceptance"), None,
-          List(Evidence("User ran the check", EvidenceOrigin.HumanReported, List(Citation.Url("https://example.com/result"))))))
+          List(Evidence("User ran the check", EvidenceOrigin.HumanReported, List(Citation.Url("https://example.com/result")))), None))
         first <- create(service, human, accepted)
         _ <- assertIO(first.id.number == 1)
         _ <- service.change(owner, request(List(Mutation.Replace(first.id, first.revision, accepted.copy(title = "Preserved report"))), Nil))
@@ -301,7 +301,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         _ <- denied(service.change(owner, failed))(_.isInstanceOf[Fault.Conflict])
         afterFailure <- service.search(owner, "archived:all", None, 200)
         _ <- assertIO(afterFailure.items.size == 1 && afterFailure.cursor.value == 1)
-        archived = initial.copy(archived = true, content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Done"), Nil))
+        archived = initial.copy(archived = true, content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Done"), Nil, None))
         _ <- service.change(owner, request(List(Mutation.Replace(first.id, Revision(1), archived)), Nil))
         hidden <- service.search(owner, "", None, 200)
         _ <- assertIO(hidden.items.isEmpty)
@@ -371,6 +371,64 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "I27: carry an optional recommended tier with its reason on a Task through Create, Replace, Produce and reads" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val recommended = TierRecommendation(ModelTier.Fast, "A mechanical edit across modules.")
+      def tiered(title: String, value: Option[TierRecommendation]): ItemDraft =
+        task(title).copy(content = Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil, value))
+      def recommendation(view: ItemView): Option[TierRecommendation] = view.item.draft.content.asInstanceOf[Content.Task].recommendation
+      for {
+        _ <- service.initialize(owner, "tier recommendation")
+        plain <- create(service, owner, tiered("Without", None))
+        created <- create(service, owner, tiered("With", Some(recommended)))
+        _ <- service.get(owner, plain.id).map(recommendation).flatMap(value => assertIO(value.isEmpty))
+        _ <- service.get(owner, created.id).map(recommendation).flatMap(value => assertIO(value.contains(recommended)))
+        replaced <- service.change(owner, request(List(
+          Mutation.Replace(plain.id, plain.revision, tiered("Without", Some(recommended.copy(tier = ModelTier.Frontier)))),
+          Mutation.Replace(created.id, created.revision, tiered("With", None))), Nil))
+        _ <- service.get(owner, plain.id).map(recommendation).flatMap(value => assertIO(value.contains(recommended.copy(tier = ModelTier.Frontier))))
+        _ <- service.get(owner, created.id).map(recommendation).flatMap(value => assertIO(value.isEmpty))
+        _ <- assertIO(replaced.items.size == 2)
+        goal <- create(service, owner, task("Producer").copy(content = Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope")))
+        claim <- service.acquire(owner, ClaimId(UUID.randomUUID()), Set(goal.id), 300000)
+        produced <- service.change(owner, request(List(
+          Mutation.Produce(goal.id, goal.revision, List(tiered("Produced with", Some(recommended)), tiered("Produced without", None)), None)), List(claim.fence)))
+        views <- ZIO.foreach(produced.items.filter(_.id.ledger == Ledger.Tasks).map(_.id))(service.get(owner, _))
+        _ <- assertIO(views.map(view => view.item.draft.title -> recommendation(view)).toMap ==
+          Map("Produced with" -> Some(recommended), "Produced without" -> None))
+        _ <- service.release(owner, claim.fence)
+      } yield ()
+    }
+
+    "I27: refuse a recommended reason with a line break or beyond its bound, and accept an empty reason" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      def tiered(reason: String): ItemDraft =
+        task("Tiered").copy(content = Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil, Some(TierRecommendation(ModelTier.Standard, reason))))
+      val invalid = Fault.Invalid("Invalid recommendation reason")
+      for {
+        _ <- service.initialize(owner, "tier reason")
+        _ <- ZIO.foreachDiscard(List("first\nsecond", "first\rsecond", "x" * (LedgerPolicy.MaxTierReason + 1))) { reason =>
+          denied(create(service, owner, tiered(reason)))(_ == invalid)
+        }
+        empty <- create(service, owner, tiered(""))
+        bounded <- create(service, owner, tiered("x" * LedgerPolicy.MaxTierReason))
+        _ <- denied(service.change(owner, request(List(Mutation.Replace(empty.id, empty.revision, tiered("two\nlines"))), Nil)))(_ == invalid)
+        stored <- service.get(owner, empty.id)
+        _ <- assertIO(stored.item.draft.content.asInstanceOf[Content.Task].recommendation.contains(TierRecommendation(ModelTier.Standard, "")) && bounded.revision == Revision(1))
+      } yield ()
+    }
+
+    "I27: read a stored Task document by its recommendation field, which the decoder requires to be present" in { (_: LedgerService[IO]) =>
+      def document(fields: String): io.circe.Json = io.circe.parser.parse(
+        s"""{"title":"T","body":"","labels":[],"archived":false,"citations":[],"content":{"Task":{"status":"Ready","acceptance":["a"],"result":null,"validation":[]$fields}}}""").toOption.get
+      def decoded(fields: String) = ItemDraft_JsonCodec.instance.decode(baboon.runtime.shared.BaboonCodecContext.Default, document(fields))
+      // The stored form written before the field existed lacks it; dev/local-update.sql adds it as null to every stored draft, which reads as no recommendation.
+      assertIO(decoded("").isLeft &&
+        decoded(""","recommendation":null""").toOption.exists(_.content == Content.Task(TaskStatus.Ready, List("a"), None, Nil, None)) &&
+        decoded(""","recommendation":{"tier":"Fast","reason":"r"}""").toOption.exists(_.content ==
+          Content.Task(TaskStatus.Ready, List("a"), None, Nil, Some(TierRecommendation(ModelTier.Fast, "r")))))
+    }
+
     "assign produced tasks to an existing or same-batch milestone and refuse closed milestones and bad indexes" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
@@ -437,7 +495,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
     "refuse closing a milestone over a non-terminal Task by Replace and by Restore, judged on the state the request leaves" in { (service: LedgerService[IO]) =>
       val owner = scope()
       def milestone(status: MilestoneStatus): ItemDraft = task("Milestone").copy(content = Content.Milestone(status, "Deliver the tasks"))
-      def work(status: TaskStatus): ItemDraft = task(s"$status task").copy(content = Content.Task(status, List("Observable result"), None, Nil))
+      def work(status: TaskStatus): ItemDraft = task(s"$status task").copy(content = Content.Task(status, List("Observable result"), None, Nil, None))
       def refusal(target: ItemId, status: MilestoneStatus, tasks: (ItemId, TaskStatus)*): Fault = Fault.Invalid(
         s"M${target.number} cannot be changed to $status while it contains non-terminal Tasks: ${tasks.map((id, state) => s"T${id.number} ($state)").mkString(", ")}. " +
           s"Make each Done or Cancelled, or reassign it to another Open milestone, before closing M${target.number}")
@@ -566,7 +624,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         contained = linked.items.find(_.id == open.id).get
         member = linked.items.find(_.id == loose.id).get
         // A milestone closes only over terminal Tasks, so the same request finishes the Task.
-        done = task("Loose").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), None, Nil))
+        done = task("Loose").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), None, Nil, None))
         completed <- service.change(owner, request(List(Mutation.Replace(open.id, contained.revision, milestone(MilestoneStatus.Complete)),
           Mutation.Replace(loose.id, member.revision, done)), Nil))
         kept <- service.get(owner, loose.id)
@@ -590,7 +648,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
 
     "retain terminal items while related items are still open" in { (service: LedgerService[IO]) =>
       val owner = scope()
-      val done = task("Done").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil))
+      val done = task("Done").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil, None))
       val goal = ItemDraft("Goal", "body", Set.empty, false, Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope"), Nil)
       def link(source: ItemRevision, target: ItemRevision): Mutation =
         Mutation.Reference(source.id, source.revision, Relation.DerivedFrom, target.id, target.revision, true)
@@ -645,7 +703,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
     "D128: archive adopted decisions only after every scope anchor is archived and recheck anchors atomically" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val adopted = task("Scoped decision").copy(content = Content.Decision(DecisionStatus.Adopted, "Choice", "Rationale", Nil))
-      val done = task("Archived scope").copy(archived = true, content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil))
+      val done = task("Archived scope").copy(archived = true, content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil, None))
       def link(source: ItemRevision, target: ItemRevision, relation: Relation): IO[Throwable, Unit] = for {
         a <- service.get(owner, source.id)
         b <- service.get(owner, target.id)
@@ -719,7 +777,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
 
     "let settled records neither archive nor retain their terminal neighbours" in { (service: LedgerService[IO]) =>
       val owner = scope()
-      val done = task("Done").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil))
+      val done = task("Done").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil, None))
       val adopted = task("Adopted decision").copy(content = Content.Decision(DecisionStatus.Adopted, "Choice", "Rationale", Nil))
       val current = task("Current memory").copy(content = Content.Memory(MemoryStatus.Current, "Knowledge", "Applies here", Nil))
       def link(source: ItemRevision, target: ItemRevision): Mutation =
@@ -743,7 +801,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
 
     "archive only terminal current revisions atomically and replay the exact acknowledgement" in { (service: LedgerService[IO]) =>
       val owner = scope()
-      val done = task("Completed").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil))
+      val done = task("Completed").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil, None))
       for {
         _ <- service.initialize(owner, "Archival invariant")
         first <- create(service, owner, done)
@@ -779,7 +837,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       for {
         _ <- service.initialize(owner, "references")
         left <- create(service, owner, task("Dependent"))
-        right <- create(service, owner, task("Prerequisite").copy(archived = true, content = Content.Task(TaskStatus.Done, List("Observable result"), None, Nil)))
+        right <- create(service, owner, task("Prerequisite").copy(archived = true, content = Content.Task(TaskStatus.Done, List("Observable result"), None, Nil, None)))
         added <- service.change(owner, request(List(Mutation.Reference(right.id, Revision(1), Relation.Blocks, left.id, Revision(1), true)), Nil))
         _ <- assertIO(added.items.map(_.revision.value) == List(2L, 2L))
         forward <- service.get(owner, left.id)
@@ -814,7 +872,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
     "return compact discovery and byte-bounded history pages with lossless continuation" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val large = task("Large narrative").copy(body = "x" * 60000,
-        content = Content.Task(TaskStatus.Ready, List("a" * 60000), Some("r" * 60000), Nil))
+        content = Content.Task(TaskStatus.Ready, List("a" * 60000), Some("r" * 60000), Nil, None))
       for {
         _ <- service.initialize(owner, "bounded pages")
         first <- create(service, owner, large)

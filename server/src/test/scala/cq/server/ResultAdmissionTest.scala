@@ -20,7 +20,7 @@ abstract class ResultAdmissionTest extends SpecZIO with AssertZIO {
     def input: HostAdmissionInput = HostAdmissionInput(owner.project, artifact.id, owner.actor)
   }
   private def task: ItemDraft = ItemDraft("Admission task", "Result publication", Set.empty, false,
-    Content.Task(TaskStatus.Ready, List("Current ownership"), None, Nil), Nil)
+    Content.Task(TaskStatus.Ready, List("Current ownership"), None, Nil, None), Nil)
   private def begin(ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO]): IO[Throwable, Fixture] = {
     val owner = Scope(ProjectId(UUID.randomUUID()), Actor("governor", SessionId(UUID.randomUUID()), Role.Governor))
     val collector = owner.copy(actor = owner.actor.copy(subject = "host", role = Role.Collector))

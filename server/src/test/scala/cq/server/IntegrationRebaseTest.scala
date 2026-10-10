@@ -90,7 +90,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
       runtime <- ZIO.runtime[Any]
       _ <- ledger.initialize(owner, project.name)
       created <- ledger.change(owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(ItemDraft("Task", "Implement", Set.empty, false,
-        Content.Task(TaskStatus.Ready, List("Verified"), None, Nil), Nil))), Nil, "Fixture"))
+        Content.Task(TaskStatus.Ready, List("Verified"), None, Nil, None), Nil))), Nil, "Fixture"))
       claim <- ledger.acquire(owner, ClaimId(uuid), created.items.map(_.id).toSet, 300000)
       assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
       governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor, Harness.Codex,

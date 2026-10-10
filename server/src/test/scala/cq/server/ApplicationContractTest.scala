@@ -18,7 +18,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
   private val Token = "application-contract-operator-token-32"
   private val Now = 1000000L
   private def authorization(time: Long): Authorization = new Authorization(AccessConfig(Token, "http://localhost"), Clock.fixed(Instant.ofEpochMilli(time), ZoneOffset.UTC))
-  private def task: ItemDraft = ItemDraft("Task λ", "body", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable"), None, Nil), Nil)
+  private def task: ItemDraft = ItemDraft("Task λ", "body", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable"), None, Nil, None), Nil)
   private def request: ChangeRequest = ChangeRequest(RequestId(UUID.randomUUID()), List(Mutation.Create(task)), Nil, "Create")
 
   "Authenticated application (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {

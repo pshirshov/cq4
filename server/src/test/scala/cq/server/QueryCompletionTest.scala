@@ -16,7 +16,7 @@ abstract class QueryCompletionTest extends SpecZIO with AssertZIO {
   )
   private def scope(): Scope = Scope(ProjectId(UUID.randomUUID()), Actor("completion", SessionId(UUID.randomUUID()), Role.Governor))
   private def draft(title: String, labels: Set[String], archived: Boolean): ItemDraft =
-    ItemDraft(title, "Completion evidence", labels, archived, Content.Task(if (archived) TaskStatus.Done else TaskStatus.Ready, List("Completable"), None, Nil), Nil)
+    ItemDraft(title, "Completion evidence", labels, archived, Content.Task(if (archived) TaskStatus.Done else TaskStatus.Ready, List("Completable"), None, Nil, None), Nil)
   private def change(service: LedgerService[IO], owner: Scope, mutations: List[Mutation]): IO[Throwable, ChangeAck] =
     service.change(owner, ChangeRequest(RequestId(UUID.randomUUID()), mutations, Nil, "Completion scenario"))
   private def create(service: LedgerService[IO], owner: Scope, value: ItemDraft): IO[Throwable, ItemRevision] =
@@ -205,7 +205,7 @@ abstract class QueryCompletionTest extends SpecZIO with AssertZIO {
       val valid = draft("Valid", Set("valid"), false)
       val invalidDrafts = List("a\u0000b", "a\ud800b", "a\udc00b").flatMap { value =>
         List(valid.copy(labels = Set(value)), valid.copy(title = value), valid.copy(body = value),
-          valid.copy(content = Content.Task(TaskStatus.Ready, List(value), None, Nil)))
+          valid.copy(content = Content.Task(TaskStatus.Ready, List(value), None, Nil, None)))
       }
       for {
         _ <- service.initialize(owner, "representable strings")

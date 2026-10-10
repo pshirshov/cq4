@@ -16,7 +16,7 @@ abstract class ClaimCoordinationTest extends SpecZIO with AssertZIO {
   )
   private def scope(): Scope = Scope(ProjectId(UUID.randomUUID()), Actor("coordination", SessionId(UUID.randomUUID()), Role.Governor))
   private def task(title: String): ItemDraft = ItemDraft(title, "Narrative", Set.empty, false,
-    Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil), Nil)
+    Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil, None), Nil)
   private def change(service: LedgerService[IO], owner: Scope, operations: List[Mutation], fences: List[Fence]): IO[Throwable, ChangeAck] =
     service.change(owner, ChangeRequest(RequestId(UUID.randomUUID()), operations, fences, "Claim coordination"))
   private def create(service: LedgerService[IO], owner: Scope, title: String): IO[Throwable, ItemRevision] =

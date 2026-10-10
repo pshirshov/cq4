@@ -25,7 +25,7 @@ object IntegrationApiCheck {
     val workerClient = client(owner.copy(role = Role.Worker))
     val foreign = client(owner.copy(session = SessionId(uuid), role = Role.Collector))
     val task = ItemDraft("Reviewed task", "Preserved HTTP narrative", Set("consumer"), false,
-      Content.Task(TaskStatus.Ready, List("Reviewed behavior"), None, Nil), Nil)
+      Content.Task(TaskStatus.Ready, List("Reviewed behavior"), None, Nil, None), Nil)
     val created = governor.call(Command.Change(ChangeInput(project,
       ChangeRequest(RequestId(uuid), List(Mutation.Create(task), Mutation.Create(MilestoneFixture.Milestone)), Nil, "HTTP fixture")))).asInstanceOf[Result.Changed].ack
     val members = governor.call(Command.Change(ChangeInput(project, ChangeRequest(RequestId(uuid), List(Mutation.Reference(created.items.head.id, created.items.head.revision,

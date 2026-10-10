@@ -17,7 +17,7 @@ abstract class StoredWorksetContractTest extends SpecZIO with AssertZIO {
     memoizationRoots = Set(DIKey[LedgerRepository[IO]], DIKey[LedgerService[IO]]),
   )
   private def scope(role: Role): Scope = Scope(ProjectId(UUID.randomUUID()), Actor("stored worksets", SessionId(UUID.randomUUID()), role))
-  private def task(title: String): ItemDraft = ItemDraft(title, "Narrative", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil), Nil)
+  private def task(title: String): ItemDraft = ItemDraft(title, "Narrative", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil, None), Nil)
   private def goal(title: String): ItemDraft = task(title).copy(content = Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope"))
   private def idea(title: String, status: IdeaStatus): ItemDraft = task(title).copy(content = Content.Idea(status, "Outcome", "Motivation"))
   private def milestone(title: String): ItemDraft = task(title).copy(content = Content.Milestone(MilestoneStatus.Open, "Release"))
@@ -83,8 +83,8 @@ abstract class StoredWorksetContractTest extends SpecZIO with AssertZIO {
         prerequisite <- create(service, owner, question("Open prerequisite"))
         declined <- create(service, owner, idea("Declined intake", IdeaStatus.Declined))
         orphan <- create(service, owner, goal("Goal whose producer ended"))
-        archived <- create(service, owner, task("Archived").copy(archived = true, content = Content.Task(TaskStatus.Done, List("Acceptance"), None, Nil)))
-        done <- create(service, owner, task("Done").copy(content = Content.Task(TaskStatus.Done, List("Acceptance"), None, Nil)))
+        archived <- create(service, owner, task("Archived").copy(archived = true, content = Content.Task(TaskStatus.Done, List("Acceptance"), None, Nil, None)))
+        done <- create(service, owner, task("Done").copy(content = Content.Task(TaskStatus.Done, List("Acceptance"), None, Nil, None)))
         _ <- links(service, owner, List((intake, Relation.Produces, product), (product, Relation.Produces, work), (product, Relation.Produces, blocked),
           (release, Relation.Contains, work), (release, Relation.Contains, member), (blocked, Relation.BlockedBy, prerequisite),
           (declined, Relation.Produces, orphan)))

@@ -210,7 +210,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
       runtime <- ZIO.runtime[Any]
       _ <- ledger.initialize(owner, project.name)
       all <- MilestoneFixture.assigned(ledger, owner, List.tabulate(1 + further)(index => ItemDraft(s"Task $index", "Implement", Set.empty, false,
-        Content.Task(TaskStatus.Ready, List("Verified"), None, Nil), Nil)))
+        Content.Task(TaskStatus.Ready, List("Verified"), None, Nil, None), Nil)))
       created = all.take(1)
       claim <- ledger.acquire(owner, ClaimId(uuid), created.map(_.id).toSet, 300000)
       others <- ZIO.foreach(all.drop(1))(member => ledger.acquire(owner, ClaimId(uuid), Set(member.id), 300000).map(member -> _.fence))

@@ -54,7 +54,7 @@ abstract class CatalogueContractTest extends SpecZIO with AssertZIO {
           _ <- assertIO(rollback.isLeft)
           afterRollback <- app.liveRevision(root, scope)
           _ <- assertIO(afterRollback == renamed)
-          draft = ItemDraft("Task", "Fixture", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable"), None, Nil), Nil)
+          draft = ItemDraft("Task", "Fixture", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable"), None, Nil, None), Nil)
           _ <- app.execute(root, Command.Change(ChangeInput(project, ChangeRequest(RequestId(UUID.randomUUID()), List(Mutation.Create(draft)), Nil, "Clock fixture"))))
           itemChanged <- app.liveRevision(root, scope)
           _ <- assertIO(itemChanged.catalogue == renamed.catalogue && itemChanged.project.contains(ProjectCursors(project, ChangeCursor(1), 0, 0)))

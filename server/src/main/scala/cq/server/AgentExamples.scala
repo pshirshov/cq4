@@ -70,7 +70,7 @@ object AgentExamples {
   private val TaskDraft = ItemDraft("Reject blank names in greet", "Validate the name argument before formatting the greeting.", Set("cli"), false,
     Content.Task(TaskStatus.Ready, List("`greet ''` and `greet '   '` exit with status 2 and print an error on stderr.",
       "`greet Ada` still prints 'Hello, Ada!' and exits with status 0.",
-      "Each criterion above is demonstrated with a failing-then-passing test."), None, Nil), Nil)
+      "Each criterion above is demonstrated with a failing-then-passing test."), None, Nil, None), Nil)
   private val MilestoneDraft = ItemDraft("greet input validation", "", Set("cli"), false,
     Content.Milestone(MilestoneStatus.Open, "greet rejects invalid names with a clear error and keeps its output for valid ones."), Nil)
   private val Task = ItemView(Item(id(Ledger.Tasks, 12), Revision(1), TaskDraft, ReceivedAt + 600000, ReceivedAt + 600000,

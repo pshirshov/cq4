@@ -23,8 +23,8 @@ final class StaleSummaryPostgres extends SpecZIO with AssertZIO {
     "derive the outcome from the persisted status rather than the stored summary" in { (service: LedgerService[IO], database: LedgerDatabase) =>
       val owner = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Governor))
       val adopted = ItemDraft("Adopted decision", "", Set.empty, false, Content.Decision(DecisionStatus.Adopted, "Choice", "Rationale", Nil), Nil)
-      val done = ItemDraft("Done task", "", Set.empty, false, Content.Task(TaskStatus.Done, List("Observable result"), None, Nil), Nil)
-      val ready = ItemDraft("Ready task", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil), Nil)
+      val done = ItemDraft("Done task", "", Set.empty, false, Content.Task(TaskStatus.Done, List("Observable result"), None, Nil, None), Nil)
+      val ready = ItemDraft("Ready task", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil, None), Nil)
       for {
         _ <- service.initialize(owner, "stale summaries")
         created <- service.change(owner, request(List(Mutation.Create(adopted), Mutation.Create(done), Mutation.Create(ready))))

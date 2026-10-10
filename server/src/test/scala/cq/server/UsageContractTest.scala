@@ -23,7 +23,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
   private def assignment(scope: Scope, members: Set[ItemId], attribution: Attribution, cohort: Option[UUID]): Assignment =
     Assignment(AssignmentId(UUID.randomUUID()), scope.project, members, attribution, cohort, Some(EvaluationScope("consumer-evaluation", "scenario", false)))
   private def task(ledger: LedgerService[IO], owner: Scope, title: String): IO[Throwable, ItemId] = {
-    val draft = ItemDraft(title, "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil), Nil)
+    val draft = ItemDraft(title, "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil, None), Nil)
     ledger.change(owner, ChangeRequest(RequestId(UUID.randomUUID()), List(Mutation.Create(draft)), Nil, "Usage fixture")).map(_.items.head.id)
   }
   private def start(usage: UsageService[IO], owner: Scope, assignment: Assignment, counterScope: CounterScope, baseline: TokenCounts, baselineCost: Money): IO[Throwable, Attempt] = for {

@@ -16,7 +16,7 @@ abstract class WorksetContractTest extends SpecZIO with AssertZIO {
     memoizationRoots = Set(DIKey[LedgerRepository[IO]], DIKey[LedgerService[IO]]),
   )
   private def scope(): Scope = Scope(ProjectId(UUID.randomUUID()), Actor("worksets", SessionId(UUID.randomUUID()), Role.Governor))
-  private def task(title: String): ItemDraft = ItemDraft(title, "Narrative", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil), Nil)
+  private def task(title: String): ItemDraft = ItemDraft(title, "Narrative", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil, None), Nil)
   private def change(service: LedgerService[IO], owner: Scope, mutations: List[Mutation]): IO[Throwable, ChangeAck] =
     service.change(owner, ChangeRequest(RequestId(UUID.randomUUID()), mutations, Nil, "Workset scenario"))
   private def create(service: LedgerService[IO], owner: Scope, draft: ItemDraft): IO[Throwable, ItemId] =
@@ -89,7 +89,7 @@ abstract class WorksetContractTest extends SpecZIO with AssertZIO {
 
     "traverse cycles and archived ancestors while distinguishing terminal prerequisites from satisfied ones" in { (service: LedgerService[IO]) =>
       val owner = scope()
-      def ended(status: TaskStatus): ItemDraft = task(status.toString).copy(archived = true, content = Content.Task(status, List("Acceptance"), None, Nil))
+      def ended(status: TaskStatus): ItemDraft = task(status.toString).copy(archived = true, content = Content.Task(status, List("Acceptance"), None, Nil, None))
       for {
         _ <- service.initialize(owner, "cycles and outcomes")
         a <- create(service, owner, ended(TaskStatus.Done).copy(title = "Archived ancestor"))

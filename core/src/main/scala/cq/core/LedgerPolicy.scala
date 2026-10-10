@@ -7,6 +7,7 @@ object LedgerPolicy {
   val MaxPage = 200
   val MaxBody = 65536
   val MaxTitle = 300
+  val MaxTierReason = 300
   val MaxLabels = 32
   val MaxLabel = 80
   val MaxRefs = 200
@@ -196,6 +197,10 @@ object LedgerPolicy {
       case c: Content.Defect => bounded(c.observed, "observed"); bounded(c.expected, "expected"); bounded(c.reproduction, "reproduction"); optional(c.cause, "cause")
       case c: Content.Goal => bounded(c.outcome, "outcome"); texts(c.acceptance, "acceptance"); bounded(c.scope, "scope")
       case c: Content.Task => invalid(c.acceptance.nonEmpty, "Acceptance is required"); texts(c.acceptance, "acceptance"); optional(c.result, "result")
+        // The reason is one line; whether it is empty is a rule of a Planner's proposal, not of the ledger.
+        c.recommendation.foreach { value =>
+          invalid(value.reason.length <= MaxTierReason && !value.reason.exists(ch => ch == '\n' || ch == '\r'), "Invalid recommendation reason")
+        }
       case c: Content.Research => text(c.question, "research question"); optional(c.conclusion, "conclusion"); optional(c.recommendation, "recommendation")
       case c: Content.Hypothesis => text(c.claim, "claim"); text(c.rationale, "rationale"); optional(c.adjudication, "adjudication")
       case c: Content.Question =>

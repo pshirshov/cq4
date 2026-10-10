@@ -27,6 +27,24 @@ MIGRATIONS = "cq_schema_migrations"
 SPANS = "cq_usage_spans"
 SCHEMA_CHECKSUM = f"SELECT checksum FROM {MIGRATIONS} WHERE version=1"
 STRUCTURE_DATABASE = "cq_update_structure"
+# The tables that hold drafts, and with them stored Tasks; each is keyed by the columns that identify its rows.
+DRAFT_TABLES = {"cq_items": "project_id, ledger, number", "cq_history": "project_id, ledger, number, revision",
+                "cq_requests": "project_id, actor, request_id", "cq_changes": "project_id, cursor",
+                "cq_result_admissions": "project_id, attempt_id", "cq_integrations": "project_id, integration_id",
+                "cq_worksets": "project_id, workset_id"}
+
+
+def with_recommendation(value):
+    """What the SQL function with_recommendation does: every stored Task that lacks its optional field recommendation gains it as null."""
+    if isinstance(value, list):
+        return [with_recommendation(entry) for entry in value]
+    if isinstance(value, dict):
+        result = {key: with_recommendation(member) for key, member in value.items()}
+        task = result.get("Task")
+        if isinstance(task, dict) and "acceptance" in task and "validation" in task and "recommendation" not in task:
+            result["Task"] = {**task, "recommendation": None}
+        return result
+    return value
 
 
 def require(condition: bool, message: str) -> None:
@@ -178,7 +196,7 @@ def structure(database: Database, name: str, label: str) -> list[str]:
 
 class DriveIdentityAndPeriods:
     """The step from the schema without drive periods: it creates the table cq_drive_periods with its index, gives every stored driver a
-    drive identity in its body and its summary, gives every stored span the optional fields check and await as null, records the state each driver is in as the first period of its drive, and records the
+    drive identity in its body and its summary, gives every stored span the optional fields check and await as null, gives every stored Task in a draft the optional field recommendation as null, records the state each driver is in as the first period of its drive, and records the
     schema hash that declares the table."""
     def __init__(self, sql: str, schema_after: str, schema_source: Path):
         self.sql = sql
@@ -186,6 +204,7 @@ class DriveIdentityAndPeriods:
         self.schema_source = schema_source
         self.drivers: list[dict] = []
         self.spans: list[dict] = []
+        self.drafts: dict[str, list[dict]] = {}
 
     @staticmethod
     def rows(database: Database, label: str) -> list[dict]:
@@ -195,6 +214,12 @@ class DriveIdentityAndPeriods:
     def capture(self, database: Database) -> None:
         self.drivers = self.rows(database, "drivers-before")
         self.spans = self.span_rows(database, "spans-before")
+        self.drafts = {table: self.draft_rows(database, table, f"{table}-before") for table in DRAFT_TABLES}
+
+    @staticmethod
+    def draft_rows(database: Database, table: str, label: str) -> list[dict]:
+        rows = database.query(f"SELECT to_jsonb(t) FROM {table} t ORDER BY {DRAFT_TABLES[table]}", label)
+        return [json.loads(row) for row in rows.splitlines()]
 
     @staticmethod
     def span_rows(database: Database, label: str) -> list[dict]:
@@ -204,8 +229,12 @@ class DriveIdentityAndPeriods:
     def verify(self, database: Database, before: dict[str, str], after: dict[str, str]) -> dict:
         require(database.query(SCHEMA_CHECKSUM, "schema-after") == self.schema_after, "Data step did not record the schema of the new package")
         require(set(after) == set(before) | {PERIODS}, f"Data step created or dropped a table other than {PERIODS}")
-        require(all(after[table] == value for table, value in before.items() if table not in (DRIVERS, SPANS, MIGRATIONS)),
-                f"Data step changed a table other than {DRIVERS}, {SPANS}, {PERIODS} and {MIGRATIONS}")
+        require(all(after[table] == value for table, value in before.items() if table not in (DRIVERS, SPANS, MIGRATIONS, *DRAFT_TABLES)),
+                f"Data step changed a table other than {DRIVERS}, {SPANS}, {PERIODS}, {MIGRATIONS} and the tables of drafts")
+        # A stored Task decodes only with the optional field recommendation present: each gains it as null and nothing else changes.
+        for table, was in self.drafts.items():
+            now = self.draft_rows(database, table, f"{table}-after")
+            require(now == [with_recommendation(row) for row in was], f"Data step changed {table} other than by the field recommendation of its Tasks")
         # A stored span decodes only with the optional fields check and await present: each gains them as null and nothing else changes.
         spans = self.span_rows(database, "spans-after")
         require(len(spans) == len(self.spans), "Data step created or dropped a span")
@@ -247,7 +276,7 @@ class DriveIdentityAndPeriods:
             database.query(f"DROP DATABASE IF EXISTS {STRUCTURE_DATABASE}", "structure-drop")
         require(structure(database, "postgres", "structure-updated") == declared, "Updated database structure differs from the schema of the new package")
         return {"dataStep": DRIVE_IDENTITY_AND_PERIODS, "drivers": len(drivers), "periods": len(periods), "tableCreated": PERIODS,
-                "spans": len(spans), "otherDataUnchanged": True, "structureAsDeclared": True}
+                "spans": len(spans), "draftTables": sorted(DRAFT_TABLES), "otherDataUnchanged": True, "structureAsDeclared": True}
 
 
 def data_step(before: dict, after: dict, step: dict, source: Path) -> DataStep | None:

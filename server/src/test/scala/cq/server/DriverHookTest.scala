@@ -78,7 +78,7 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
     def goal(title: String): ItemId =
       await(ledger.change(operator, request(List(Mutation.Create(draft(title, Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope")))), Nil))).items.head.id
     def task(title: String): ItemId =
-      await(ledger.change(operator, request(List(Mutation.Create(draft(title, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil)))), Nil))).items.head.id
+      await(ledger.change(operator, request(List(Mutation.Create(draft(title, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil, None)))), Nil))).items.head.id
     def retitle(id: ItemId, title: String): ChangeRequest = {
       val view = await(ledger.get(operator, id))
       request(List(Mutation.Replace(id, view.item.revision, view.item.draft.copy(title = title))), Nil)
@@ -117,7 +117,7 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
     def produce(scope: Scope, producer: ItemId, title: String): ItemId = await(for {
       claim <- ledger.acquire(scope, ClaimId(uuid), Set(producer), 600000L)
       current <- ledger.get(scope, producer)
-      change = request(List(Mutation.Produce(producer, current.item.revision, List(draft(title, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil))), None)), List(claim.fence))
+      change = request(List(Mutation.Produce(producer, current.item.revision, List(draft(title, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil, None))), None)), List(claim.fence))
       ack <- ledger.change(scope, change).ensuring(ledger.release(scope, claim.fence).ignore)
     } yield ack.items.find(_.id != producer).get.id)
     def change(scope: Scope, value: ChangeRequest): ChangeAck = await(ledger.change(scope, value))

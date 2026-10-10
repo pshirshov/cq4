@@ -16,7 +16,7 @@ abstract class QueryContractTest extends SpecZIO with AssertZIO {
   )
   private def scope(): Scope = Scope(ProjectId(UUID.randomUUID()), Actor("query", SessionId(UUID.randomUUID()), Role.Governor))
   private def draft(title: String, body: String, labels: Set[String], archived: Boolean): ItemDraft =
-    ItemDraft(title, body, labels, archived, Content.Task(if (archived) TaskStatus.Done else TaskStatus.Ready, List("Searchable"), None, Nil), Nil)
+    ItemDraft(title, body, labels, archived, Content.Task(if (archived) TaskStatus.Done else TaskStatus.Ready, List("Searchable"), None, Nil, None), Nil)
   private def change(service: LedgerService[IO], owner: Scope, mutations: List[Mutation]): IO[Throwable, ChangeAck] =
     service.change(owner, ChangeRequest(RequestId(UUID.randomUUID()), mutations, Nil, "Query contract scenario"))
   private def create(service: LedgerService[IO], owner: Scope, value: ItemDraft): IO[Throwable, ItemRevision] =
@@ -33,7 +33,7 @@ abstract class QueryContractTest extends SpecZIO with AssertZIO {
         _ <- service.initialize(owner, "query scope")
         _ <- service.initialize(other, "other scope")
         a <- create(service, owner, draft("Alpha retry", "deadline café", Set(quotedTag), false))
-        b <- create(service, owner, draft("Beta retry", "deadline", Set("ordinary"), false).copy(content = Content.Task(TaskStatus.Done, List("Searchable"), None, Nil)))
+        b <- create(service, owner, draft("Beta retry", "deadline", Set("ordinary"), false).copy(content = Content.Task(TaskStatus.Done, List("Searchable"), None, Nil, None)))
         c <- create(service, owner, draft("Archived alpha", "retry deadline", Set.empty, true))
         _ <- create(service, other, draft("Alpha retry", "deadline café", Set(quotedTag), false))
         _ <- matches(service, owner, "", List(a.id, b.id))
@@ -152,7 +152,7 @@ abstract class QueryContractTest extends SpecZIO with AssertZIO {
         _ <- service.initialize(owner, "search updates")
         a <- create(service, owner, original)
         b <- create(service, owner, draft("Other", "second phrase", Set.empty, false))
-        updated <- change(service, owner, List(Mutation.Replace(a.id, a.revision, original.copy(title = "After", body = "new phrase", labels = Set("new"), archived = true, content = Content.Task(TaskStatus.Done, List("Searchable"), None, Nil)))))
+        updated <- change(service, owner, List(Mutation.Replace(a.id, a.revision, original.copy(title = "After", body = "new phrase", labels = Set("new"), archived = true, content = Content.Task(TaskStatus.Done, List("Searchable"), None, Nil, None)))))
         _ <- matches(service, owner, "before OR tag:old archived:all", Nil)
         _ <- matches(service, owner, "after tag:new archived:true", List(a.id))
         _ <- change(service, owner, List(Mutation.Restore(a.id, updated.items.head.revision, a.revision, Nil)))

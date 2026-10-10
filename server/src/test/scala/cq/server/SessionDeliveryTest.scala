@@ -110,7 +110,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         runtime <- ZIO.runtime[Any]
         _ <- ledger.initialize(owner, "Check recovery")
         created <- ledger.change(owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(ItemDraft("Task", "Review", Set.empty, false,
-          Content.Task(TaskStatus.Ready, List("Verified"), None, Nil), Nil))), Nil, "Fixture"))
+          Content.Task(TaskStatus.Ready, List("Verified"), None, Nil, None), Nil))), Nil, "Fixture"))
         assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
         governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor,
           Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None))
@@ -224,7 +224,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         runtime <- ZIO.runtime[Any]
         _ <- ledger.initialize(owner, "Span recovery")
         created <- ledger.change(owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(ItemDraft("Task", "Integrate", Set.empty, false,
-          Content.Task(TaskStatus.Ready, List("Verified"), None, Nil), Nil))), Nil, "Fixture"))
+          Content.Task(TaskStatus.Ready, List("Verified"), None, Nil, None), Nil))), Nil, "Fixture"))
         assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
         governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor,
           Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None))
@@ -288,7 +288,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
               runtime <- ZIO.runtime[Any]
               _ <- ledger.initialize(owner, "Sealed recovery")
               members <- MilestoneFixture.assigned(ledger, owner, List(ItemDraft("Task", "Body", Set.empty, false,
-                Content.Task(TaskStatus.Ready, List("Outcome"), None, Nil), Nil)))
+                Content.Task(TaskStatus.Ready, List("Outcome"), None, Nil, None), Nil)))
               member = members.head
               claim <- ledger.acquire(owner, ClaimId(uuid), Set(member.id), 300000)
               assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
@@ -387,7 +387,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         val limits = HostLimits(3000, 1000, 300, 2000, 262144)
         val profile = HarnessSetting(Harness.Codex, "/fixture/codex", "fixture", "fixture", "0.156.1", Nil, Set.empty)
         val draft = ItemDraft("Recovery consumer", "Retain interrupted evidence", Set.empty, false,
-          Content.Task(TaskStatus.Ready, List("Account once"), None, Nil), Nil)
+          Content.Task(TaskStatus.Ready, List("Account once"), None, Nil, None), Nil)
         def uuid: UUID = UUID.randomUUID()
         def native(input: Int): String = s"""{"type":"thread.started","thread_id":"recovery-thread"}
 {"type":"turn.completed","usage":{"input_tokens":$input,"cached_input_tokens":20,"cache_write_input_tokens":0,"output_tokens":31,"reasoning_output_tokens":3}}
@@ -514,7 +514,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         val limits = HostLimits(3000, 1000, 300, 2000, 262144)
         val profile = HarnessSetting(Harness.Codex, "/fixture/codex", "fixture", "fixture", "0.156.1", Nil, Set.empty)
         val draft = ItemDraft("Recovery consumer", "Deliver every child", Set.empty, false,
-          Content.Task(TaskStatus.Ready, List("Account once"), None, Nil), Nil)
+          Content.Task(TaskStatus.Ready, List("Account once"), None, Nil, None), Nil)
         def uuid: UUID = UUID.randomUUID()
         ZIO.scoped {
           for {

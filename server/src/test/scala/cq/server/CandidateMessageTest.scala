@@ -11,7 +11,7 @@ final class CandidateMessageLocal extends AnyWordSpec {
   private def id(ledger: Ledger, number: Long): ItemId = ItemId(project, ledger, number)
   private def view(item: ItemId, title: String, content: Content, refs: List[ItemRef]): ItemView =
     ItemView(Item(item, Revision(1), ItemDraft(title, "Body", Set.empty, false, content, Nil), 1, 1, Provenance(actor, 1, RequestId(UUID.randomUUID()))), refs)
-  private val task = Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil)
+  private val task = Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil, None)
   private val defect = Content.Defect(DefectStatus.Open, Severity.High, "Observed", "Expected", "Reproduction", None, Nil)
 
   "Candidate commit messages (Behavioral Active Blackbox Atomic)" should {

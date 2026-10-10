@@ -16,7 +16,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
   private def uuid: UUID = UUID.randomUUID()
   private def owner: Scope = Scope(ProjectId(uuid), Actor("cohort governor", SessionId(uuid), Role.Governor))
   private def task: ItemDraft = ItemDraft("Work", "Required behavior", Set("shared-label"), false,
-    Content.Task(TaskStatus.Ready, List("Independent acceptance"), None, Nil), Nil)
+    Content.Task(TaskStatus.Ready, List("Independent acceptance"), None, Nil, None), Nil)
   private def request(roots: Set[ItemId], work: DispatchWork): CohortRequest = CohortRequest(RequestId(uuid), roots, work, Nil, Nil, None,
     HostLimits(3000, 1000, 300, 2000, 262144))
   private final class MutableBase(var head: GitCommit, ancestors: Set[GitCommit]) extends ExecutionBase {
@@ -204,7 +204,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
   "Automatic cohort selection (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
     "offer an explicit completed root for planning its reopening without executing or rediscovering completed work" in { (ledger: LedgerService[IO]) =>
       val scope = owner
-      val completed = task.copy(content = Content.Task(TaskStatus.Done, List("Independent acceptance"), None, Nil))
+      val completed = task.copy(content = Content.Task(TaskStatus.Done, List("Independent acceptance"), None, Nil, None))
       for {
         runtime <- ZIO.runtime[Any]
         _ <- ledger.initialize(scope, "Reviewed reopening")
@@ -880,7 +880,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         // A milestone closes only over terminal Tasks, so the Task is finished, the milestone completed and the Task then reopened.
         replace = (id: ItemId, draft: ItemDraft, reason: String) => ledger.get(scope, id).flatMap(view =>
           ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Replace(id, view.item.revision, draft)), Nil, reason)))
-        _ <- replace(stranded, task.copy(content = Content.Task(TaskStatus.Done, List("Independent acceptance"), None, Nil)), "Finish the task")
+        _ <- replace(stranded, task.copy(content = Content.Task(TaskStatus.Done, List("Independent acceptance"), None, Nil, None)), "Finish the task")
         _ <- replace(closing, milestone.copy(content = Content.Milestone(MilestoneStatus.Complete, "Deliver the tasks")), "Complete the milestone")
         reopened <- replace(stranded, task, "Reopen the task")
         // The reopened Task has the selected content at a later revision. The choice is pinned to that revision to reach the milestone check:
@@ -1009,7 +1009,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         runtime <- ZIO.runtime[Any]
         _ <- ledger.initialize(scope, "readiness drift")
         created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(task),
-          Mutation.Create(task.copy(content = Content.Task(TaskStatus.Done, List("Independent acceptance"), None, Nil)))), Nil, "Candidates"))
+          Mutation.Create(task.copy(content = Content.Task(TaskStatus.Done, List("Independent acceptance"), None, Nil, None)))), Nil, "Candidates"))
         member = created.items.head.id
         dependency = created.items.last.id
         _ <- link(ledger, scope, member, Relation.BlockedBy, dependency)

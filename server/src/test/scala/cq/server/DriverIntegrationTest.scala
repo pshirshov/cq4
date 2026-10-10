@@ -183,7 +183,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       runtime <- ZIO.runtime[Any]
       _ <- ledger.initialize(owner, project.name)
       created <- MilestoneFixture.assigned(ledger, owner, List(ItemDraft("Task", "Implement", Set.empty, false,
-        Content.Task(TaskStatus.Ready, List("Verified"), None, Nil), Nil)))
+        Content.Task(TaskStatus.Ready, List("Verified"), None, Nil, None), Nil)))
       claim <- ledger.acquire(owner, ClaimId(uuid), created.map(_.id).toSet, 300000)
       assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
       governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor, Harness.Codex,
@@ -440,7 +440,7 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "cache
           }
           _ <- ZIO.attempt(assert(events == List(SessionUnitEvent.Watching(own)), events.toString))
           // A Task somebody else gated on a Question: the session's advance of that Task waits on it from the host's next round on.
-          created <- operator(change(Mutation.Create(draft("Gate", question)), Mutation.Create(draft("Gated", Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil)))))
+          created <- operator(change(Mutation.Create(draft("Gate", question)), Mutation.Create(draft("Gated", Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil, None)))))
           (gate, gated) = (created.find(_.id.ledger == Ledger.Questions).get, created.find(_.id.ledger == Ledger.Tasks).get)
           _ <- operator(change(Mutation.Reference(gated.id, gated.revision, Relation.BlockedBy, gate.id, gate.revision, true)))
           _ <- f.sessionTool(SessionCommand_JsonCodec.encode(context,

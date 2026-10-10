@@ -69,7 +69,7 @@ final class CohortAssessmentLocal extends AnyWordSpec {
       val actor = Actor("fixture", SessionId(UUID.randomUUID()), Role.Governor)
       val items = members.map { member =>
         member.id -> Item(member.id, member.revision,
-          ItemDraft("Task", "Specification", Set.empty, false, Content.Task(TaskStatus.Ready, List("Expected behavior"), None, Nil), Nil),
+          ItemDraft("Task", "Specification", Set.empty, false, Content.Task(TaskStatus.Ready, List("Expected behavior"), None, Nil, None), Nil),
           1, 1, Provenance(actor, 1, RequestId(UUID.randomUUID())))
       }.toMap
       CohortAssessmentPolicy.criteria(report, items.apply)

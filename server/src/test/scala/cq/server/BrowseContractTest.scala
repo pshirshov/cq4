@@ -15,7 +15,7 @@ abstract class BrowseContractTest extends SpecZIO with AssertZIO {
     memoizationRoots = Set(DIKey[LedgerRepository[IO]], DIKey[LedgerService[IO]]),
   )
   private def scope(): Scope = Scope(ProjectId(UUID.randomUUID()), Actor("browse", SessionId(UUID.randomUUID()), Role.Human))
-  private def task(title: String, status: TaskStatus): ItemDraft = ItemDraft(title, "", Set.empty, false, Content.Task(status, List("Browse"), None, Nil), Nil)
+  private def task(title: String, status: TaskStatus): ItemDraft = ItemDraft(title, "", Set.empty, false, Content.Task(status, List("Browse"), None, Nil, None), Nil)
   private def defect(title: String, severity: Severity): ItemDraft = ItemDraft(title, "", Set.empty, false,
     Content.Defect(DefectStatus.Open, severity, "Cards", "Table", "Browse", None, Nil), Nil)
   private def change(service: LedgerService[IO], owner: Scope, mutations: List[Mutation]): IO[Throwable, ChangeAck] =

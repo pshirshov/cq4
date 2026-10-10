@@ -30,7 +30,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
   }
   private def requestId: RequestId = RequestId(UUID.randomUUID())
   private def draft(body: String): ItemDraft = ItemDraft("Consumer task", body, Set.empty, false,
-    Content.Task(TaskStatus.Ready, List("Behavior verified"), None, Nil), Nil)
+    Content.Task(TaskStatus.Ready, List("Behavior verified"), None, Nil, None), Nil)
   private def memory: ItemDraft = draft("").copy(title = "Consumer memory", content = Content.Memory(MemoryStatus.Current, "The consumer reads UTF-8 stdin", "Any consumer task",
     List(Evidence("The specification states the encoding", EvidenceOrigin.ModelDeclared, List(Citation.File("README.md", None))))))
   private def milestone: ItemDraft = draft("").copy(title = "Consumer milestone", content = Content.Milestone(MilestoneStatus.Open, "Deliver the consumer"))

@@ -21,7 +21,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
   private def uuid: UUID = UUID.randomUUID()
   private val recordedResult = "Worker evidence: failing reproduction, then passing checks"
   private def task: ItemDraft = ItemDraft("Integration task", "Preserved narrative", Set("consumer"), false,
-    Content.Task(TaskStatus.Ready, List("Exact reviewed behavior"), Some(recordedResult), Nil), Nil)
+    Content.Task(TaskStatus.Ready, List("Exact reviewed behavior"), Some(recordedResult), Nil, None), Nil)
   private def integrated(intent: IntegrationIntent): String = s"Integrated ${intent.candidate.value} into ${intent.target}"
   /** An integration target that never advanced: every candidate is expected at its worker's recorded base. */
   private val recordedBases: ExecutionBase = new ExecutionBase {

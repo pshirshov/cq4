@@ -402,7 +402,7 @@ final class WorkflowLocal extends AnyWordSpec {
 
     "name no Planner in the refusal of a Task without a milestone, which every mode meets" in {
       val project = ProjectId(UUID.randomUUID())
-      val task = Item(ItemId(project, Ledger.Tasks, 7), Revision(1), ItemDraft("Task", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil), Nil), 1L, 1L,
+      val task = Item(ItemId(project, Ledger.Tasks, 7), Revision(1), ItemDraft("Task", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil, None), Nil), 1L, 1L,
         Provenance(Actor("governor", SessionId(UUID.randomUUID()), Role.Governor), 1L, RequestId(UUID.randomUUID())))
       val refusal = cq.core.MilestonePolicy.refusal(DispatchWork.Worker(WorkerMode.Implement), ItemView(task, Nil), _ => fail("No milestone is read"))
       assert(refusal.contains(cq.core.MilestoneRefusal(CohortReason.NoMilestone, "Work refused: T7 has no milestone. Assign each Task to an Open milestone before work starts")))

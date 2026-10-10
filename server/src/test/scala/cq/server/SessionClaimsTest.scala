@@ -59,7 +59,7 @@ final class SessionClaimsDummy extends SpecZIO with AssertZIO {
       runtime <- ZIO.runtime[Any]
       _ <- service.initialize(owner, "Session claims")
       created <- service.change(owner, ChangeRequest(RequestId(uuid), List.tabulate(count)(index => Mutation.Create(ItemDraft(s"Task $index", "Narrative", Set.empty, false,
-        Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil), Nil))), Nil, "Fixture"))
+        Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil, None), Nil))), Nil, "Fixture"))
       governor = new Governor(service, owner, runtime)
     } yield World(service, owner, other, created.items.map(_.id), governor, new SessionClaims(owner, governor, logstage.IzLogger.NullLogger))
   }

@@ -31,7 +31,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
       val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
       val separator = if (config.url.contains("?")) "&" else "?"
       val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
-      val draft = ItemDraft("Ready", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil), Nil)
+      val draft = ItemDraft("Ready", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil, None), Nil)
       for {
         _ <- service.initialize(operator, "archived driver")
         created <- service.change(operator, request(List(Mutation.Create(draft))))
@@ -78,7 +78,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
       val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
       val separator = if (config.url.contains("?")) "&" else "?"
       val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
-      val draft = ItemDraft("Ready", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil), Nil)
+      val draft = ItemDraft("Ready", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil, None), Nil)
       for {
         _ <- service.initialize(operator, "archived periods")
         created <- service.change(operator, request(List(Mutation.Create(draft))))
@@ -109,7 +109,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
       (service: LedgerService[IO], database: LedgerDatabase, config: DatabaseConfig, archives: ProjectArchives) =>
       val owner = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Governor))
       val adopted = ItemDraft("Adopted decision", "", Set.empty, false, Content.Decision(DecisionStatus.Adopted, "Choice", "Rationale", Nil), Nil)
-      val done = ItemDraft("Done task", "", Set.empty, true, Content.Task(TaskStatus.Done, List("Observable result"), None, Nil), Nil)
+      val done = ItemDraft("Done task", "", Set.empty, true, Content.Task(TaskStatus.Done, List("Observable result"), None, Nil, None), Nil)
       val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
       val separator = if (config.url.contains("?")) "&" else "?"
       val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
@@ -144,7 +144,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
       (service: LedgerService[IO], usage: UsageService[IO], config: DatabaseConfig, archives: ProjectArchives) =>
       val owner = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Governor))
       val host = owner.copy(actor = owner.actor.copy(role = Role.Collector))
-      val task = ItemDraft("Checked task", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil), Nil)
+      val task = ItemDraft("Checked task", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil, None), Nil)
       val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
       val separator = if (config.url.contains("?")) "&" else "?"
       val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
@@ -177,7 +177,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
       (service: LedgerService[IO], usage: UsageService[IO], config: DatabaseConfig, archives: ProjectArchives) =>
       val owner = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Governor))
       val host = owner.copy(actor = owner.actor.copy(role = Role.Collector))
-      val task = ItemDraft("Blocked task", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil), Nil)
+      val task = ItemDraft("Blocked task", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil, None), Nil)
       val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
       val separator = if (config.url.contains("?")) "&" else "?"
       val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))

@@ -19,7 +19,7 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
   private final case class Published(result: ChildResult, artifact: ArtifactMetadata)
   private def uuid: UUID = UUID.randomUUID()
   private def task: ItemDraft = ItemDraft("Proposal task", "PRIVATE_DRAFT " + "x" * 4096, Set.empty, false,
-    Content.Task(TaskStatus.Ready, List("Preserve assignment and atomicity"), None, Nil), Nil)
+    Content.Task(TaskStatus.Ready, List("Preserve assignment and atomicity"), None, Nil, None), Nil)
   private def research: ItemDraft = task.copy(title = "Proposal research", content = Content.Research(ResearchStatus.Open, "What remains unknown?", Nil, None, None))
   private def milestone(status: MilestoneStatus): ItemDraft = task.copy(title = s"$status milestone", content = Content.Milestone(status, "Deliver the proposed tasks"))
 
@@ -83,7 +83,7 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) => for {
         f <- begin(ledger, usage)
         completed = task.copy(archived = true, content = Content.Task(TaskStatus.Done, List("Preserve assignment and atomicity"), Some("Declared complete"),
-          List(Evidence("Model evidence", EvidenceOrigin.ModelDeclared, Nil))))
+          List(Evidence("Model evidence", EvidenceOrigin.ModelDeclared, Nil)), None))
         report = plan(f, List(ProposedMutation.Create(milestone(MilestoneStatus.Open)), ProposedMutation.Replace(f.members.head.id, completed),
           ProposedMutation.Produce(f.members(1).id, List(task.copy(title = "Derived task")), Some(MilestoneRef.Created(0)))))
           .copy(members = f.members.zipWithIndex.map { case (ref, index) => PlanMember(ref.id,

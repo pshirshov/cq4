@@ -35,7 +35,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
   private def codex(name: String): DriverKey = DriverKey(Harness.Codex, name)
   private val Invocations = Set("/cq:advance", "$cq-advance")
   private def invocation(text: String): String = text.takeWhile(_ != ' ').ensuring(Invocations, text)
-  private def task(title: String): ItemDraft = ItemDraft(title, "Narrative", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil), Nil)
+  private def task(title: String): ItemDraft = ItemDraft(title, "Narrative", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil, None), Nil)
   private def goal(title: String): ItemDraft = task(title).copy(content = Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope"))
   private def question(title: String): ItemDraft = task(title).copy(content = Content.Question(QuestionStatus.Open, "Prompt", "Context", Nil, None, None))
   private def defect(title: String): ItemDraft = task(title).copy(content = Content.Defect(DefectStatus.Open, Severity.Medium, "Observed", "Expected", "Reproduction", None, Nil))
@@ -175,7 +175,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         LedgerPolicy.status(current.draft.content) == QuestionStatus.Open.toString && kept.exists(_.state == DriverState.On))
       // The operator, outside the drive, finishes the only other ready work.
       task <- service.get(w.operator, ready).map(_.item)
-      _ <- service.change(w.operator, request(List(Mutation.Replace(ready, task.revision, task.draft.copy(content = Content.Task(TaskStatus.Done, List("Observed outcome"), None, Nil)))), Nil))
+      _ <- service.change(w.operator, request(List(Mutation.Replace(ready, task.revision, task.draft.copy(content = Content.Task(TaskStatus.Done, List("Observed outcome"), None, Nil, None)))), Nil))
       continued <- query(service, w, key)
       _ <- assertIO(continued match {
         case DriverReply.Stop(DriverStopped(DriverStop.UserInputRequired, "Awaiting the user on Q1; the driver never answers questions or infers approval"), Some(value), _) =>
@@ -224,7 +224,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       _ <- assertIO(on.exists(_.state == DriverState.On))
       // The operator, outside the drive, finishes the only other ready work.
       task <- service.get(w.operator, ready).map(_.item)
-      _ <- service.change(w.operator, request(List(Mutation.Replace(ready, task.revision, task.draft.copy(content = Content.Task(TaskStatus.Done, List("Observed outcome"), None, Nil)))), Nil))
+      _ <- service.change(w.operator, request(List(Mutation.Replace(ready, task.revision, task.draft.copy(content = Content.Task(TaskStatus.Done, List("Observed outcome"), None, Nil, None)))), Nil))
       _ <- ZIO.when(targets.nonEmpty)(directive(service, w, key).flatMap(issued => submit(service, w, w.governor, issued.directive.text)))
       continued <- query(service, w, key)
       _ <- continued match {
@@ -264,7 +264,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
   }
   private def set(service: LedgerService[IO], scope: Scope, id: ItemId, content: Content): IO[Throwable, ChangeAck] =
     service.get(scope, id).flatMap(view => service.change(scope, request(List(Mutation.Replace(id, view.item.revision, view.item.draft.copy(content = content))), Nil)))
-  private def tasked(status: TaskStatus): Content = Content.Task(status, List("Observed outcome"), None, Nil)
+  private def tasked(status: TaskStatus): Content = Content.Task(status, List("Observed outcome"), None, Nil, None)
   private final case class Stranded(w: World, key: DriverKey, old: ItemId, open: ItemId, member: ItemId, sibling: ItemId, placed: ItemId, free: ItemId)
   // An active driven cycle over `roots` in a project where the Ready Task T1 (`member`) is PartOf M1 (`old`), which is `closed`. The state is
   // reached the way the closure gate permits: M1 is closed over Done Tasks and T1 is reopened afterwards. T2 (`sibling`) stays Done under M1,
@@ -1699,7 +1699,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         correction = produced.items.find(_.id != root).get.id
         done <- service.get(w.operator, correction)
         _ <- service.change(w.operator, request(List(Mutation.Replace(correction, done.item.revision,
-          done.item.draft.copy(content = Content.Task(TaskStatus.Done, List("Observed outcome"), Some("Integrated"), Nil)))), Nil))
+          done.item.draft.copy(content = Content.Task(TaskStatus.Done, List("Observed outcome"), Some("Integrated"), Nil, None)))), Nil))
         cycle <- driven(service, w, key, workset(root))
         open <- service.get(w.governor, root)
         // The Governor declares the closure; it cannot give its own entry host provenance. The refusal is the ledger's and leaves the driver on.
@@ -2004,7 +2004,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       }
       for {
         _ <- service.initialize(w.operator, "stop reasons")
-        done <- create(service, w.operator, task("Done").copy(content = Content.Task(TaskStatus.Done, List("Acceptance"), None, Nil)))
+        done <- create(service, w.operator, task("Done").copy(content = Content.Task(TaskStatus.Done, List("Acceptance"), None, Nil, None)))
         asked <- create(service, w.operator, question("Open question"))
         blocked <- create(service, w.operator, task("Blocked by the question"))
         _ <- reference(service, w.operator, blocked, Relation.BlockedBy, asked, true).flatMap(service.change(w.operator, _))

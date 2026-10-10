@@ -10,7 +10,7 @@ final class CohortProgressLocal extends AnyWordSpec {
   private def id(number: Long): ItemId = ItemId(project, Ledger.Tasks, number)
   private val actor = Actor("fixture", SessionId(UUID.randomUUID()), Role.Governor)
   private def item(number: Long): ItemView = ItemView(Item(id(number), Revision(1),
-    ItemDraft("Task", "Required behavior", Set.empty, false, Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil), Nil),
+    ItemDraft("Task", "Required behavior", Set.empty, false, Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil, None), Nil),
     1, 1, Provenance(actor, 1, RequestId(UUID.randomUUID()))), List(ItemRef(Relation.PartOf, ItemId(project, Ledger.Milestones, 1))))
   private val checks = List(ValidationCheck("test", List("verify", "first", "second"), 1000, 4096, 1, 0))
   private val work = DispatchWork.Worker(WorkerMode.Implement)

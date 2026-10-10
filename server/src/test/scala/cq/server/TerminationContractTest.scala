@@ -16,7 +16,7 @@ abstract class TerminationContractTest extends SpecZIO with AssertZIO {
   )
   private def scope(): Scope = Scope(ProjectId(UUID.randomUUID()), Actor("termination", SessionId(UUID.randomUUID()), Role.Governor))
   private def task(title: String): ItemDraft = ItemDraft(title, "Retained narrative", Set("kept"), false,
-    Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil), List(Citation.Url("https://example.org/evidence")))
+    Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil, None), List(Citation.Url("https://example.org/evidence")))
   private def change(service: LedgerService[IO], owner: Scope, mutations: List[Mutation]): IO[Throwable, ChangeAck] =
     service.change(owner, ChangeRequest(RequestId(UUID.randomUUID()), mutations, Nil, "Termination fixture"))
   private def create(service: LedgerService[IO], owner: Scope, draft: ItemDraft): IO[Throwable, ItemId] =
@@ -45,7 +45,7 @@ abstract class TerminationContractTest extends SpecZIO with AssertZIO {
         Content.Milestone(MilestoneStatus.Open, "Release"), Content.Idea(IdeaStatus.Proposed, "Outcome", "Motivation"),
         Content.Defect(DefectStatus.Open, Severity.High, "Actual", "Expected", "Reproduction", Some("Possible cause"), evidence),
         Content.Goal(GoalStatus.Open, "Goal", List("Acceptance"), "Scope"),
-        Content.Task(TaskStatus.Active, List("Acceptance"), Some("Partial result"), evidence),
+        Content.Task(TaskStatus.Active, List("Acceptance"), Some("Partial result"), evidence, None),
         Content.Research(ResearchStatus.Active, "Question", evidence, Some("Partial finding"), None),
         Content.Hypothesis(HypothesisStatus.Investigating, "Claim", "Rationale", evidence, None),
         Content.Question(QuestionStatus.Open, "Prompt", "Context", List("Alternative"), Some(QuestionRecommendation(0, "The only alternative")), None),
@@ -110,9 +110,9 @@ abstract class TerminationContractTest extends SpecZIO with AssertZIO {
       val owner = scope()
       for {
         _ <- service.initialize(owner, "termination graph")
-        root <- create(service, owner, task("Archived root").copy(archived = true, content = Content.Task(TaskStatus.Done, List("Acceptance"), None, Nil)))
+        root <- create(service, owner, task("Archived root").copy(archived = true, content = Content.Task(TaskStatus.Done, List("Acceptance"), None, Nil, None)))
         work <- create(service, owner, task("Active work"))
-        terminal <- create(service, owner, task("Terminal ancestor").copy(content = Content.Task(TaskStatus.Done, List("Done"), Some("Factual result"), Nil)))
+        terminal <- create(service, owner, task("Terminal ancestor").copy(content = Content.Task(TaskStatus.Done, List("Done"), Some("Factual result"), Nil, None)))
         below <- create(service, owner, task("Active below terminal"))
         shared <- create(service, owner, task("Shared"))
         hidden <- create(service, owner, task("Below shared"))
@@ -146,7 +146,7 @@ abstract class TerminationContractTest extends SpecZIO with AssertZIO {
       val owner = scope()
       val goal = task("Goal").copy(content = Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope"))
       val open = task("Milestone").copy(content = Content.Milestone(MilestoneStatus.Open, "Release"))
-      def work(status: TaskStatus): ItemDraft = task(s"$status task").copy(content = Content.Task(status, List("Acceptance"), None, Nil))
+      def work(status: TaskStatus): ItemDraft = task(s"$status task").copy(content = Content.Task(status, List("Acceptance"), None, Nil, None))
       def closed(intent: TerminationIntent): MilestoneStatus = if (intent == TerminationIntent.Complete) MilestoneStatus.Complete else MilestoneStatus.Cancelled
       def finished(intent: TerminationIntent): TaskStatus = if (intent == TerminationIntent.Complete) TaskStatus.Done else TaskStatus.Cancelled
       def retained(target: ItemId, status: MilestoneStatus, member: ItemId, state: TaskStatus): String =
