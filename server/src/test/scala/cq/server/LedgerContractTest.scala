@@ -436,7 +436,12 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         decoded(""","recommendation":null""").toOption.exists(_.content == none) &&
         decoded(""","recommendation":{"tier":"Fast","reason":"r"}""").toOption.exists(_.content ==
           Content.Task(TaskStatus.Ready, List("a"), None, Nil, Some(TierRecommendation(ModelTier.Fast, "r")))) &&
-        LedgerProposal_JsonCodec.instance.decode(ctx, stored).toOption.exists(_.mutations.collect { case ProposedMutation.Create(d) => d.content } == List(plain, plain)))
+        LedgerProposal_JsonCodec.instance.decode(ctx, stored).toOption.exists(_.mutations.collect { case ProposedMutation.Create(d) => d.content } == List(plain, plain)) &&
+        // Admission and proposal readers require the re-encoded document to be lossless against the stored one: an absent field that encodes as null is not a loss.
+        LedgerProposal_JsonCodec.instance.decode(ctx, stored).toOption.exists(value =>
+          cq.core.JsonRoundtrip.lossless(stored, LedgerProposal_JsonCodec.instance.encode(ctx, value))) &&
+        LedgerProposal_JsonCodec.instance.decode(ctx, stored.deepMerge(io.circe.Json.obj("undeclared" -> io.circe.Json.Null))).toOption.exists(value =>
+          !cq.core.JsonRoundtrip.lossless(stored.deepMerge(io.circe.Json.obj("undeclared" -> io.circe.Json.Null)), LedgerProposal_JsonCodec.instance.encode(ctx, value))))
     }
 
     "assign produced tasks to an existing or same-batch milestone and refuse closed milestones and bad indexes" in { (service: LedgerService[IO]) =>
