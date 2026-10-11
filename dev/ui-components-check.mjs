@@ -302,6 +302,11 @@ try {
     await bare.getByRole('checkbox', { name: 'Add recommendation' }).check();
     await bare.locator('select[aria-label=tier]').selectOption('Standard');
     assert.deepEqual(await read(), base({ tier: 'Standard', reason: '' }));
-    console.log('PASS: Task view shows its recommended tier and reason or that it has none; form changes the tier keeping the reason, removes the recommendation, and adds a tier with an empty reason');
+    // A Question's recommendation reason may span lines and is kept through the form.
+    const question = { title: 'Pick', body: 'Body', labels: [], citations: [], archived: false, content: { Question: {
+      status: 'Open', prompt: 'Which?', context: '', alternatives: ['A', 'B'], recommendation: { alternative: 0, reason: 'First\nSecond' }, answer: null } } };
+    await page.evaluate(draft => { window.form = CQComponents.editItem(draft, 'Edit'); document.body.replaceChildren(window.form.element); }, question);
+    assert.equal((await read()).content.Question.recommendation.reason, 'First\nSecond', 'a Question reason keeps its line break');
+    console.log('PASS: Task view shows its recommended tier and reason or that it has none; form changes the tier keeping the reason, removes the recommendation, adds a tier with an empty reason, and leaves a multi-line Question reason intact');
   }
 } finally { await browser.close(); }

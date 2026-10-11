@@ -67,7 +67,7 @@ function followRecommendation(alternatives: Editor, recommendation: Editor): voi
   for (const type of ['input', 'click']) alternatives.element.addEventListener(type, reconcile);
   for (const type of ['input', 'change']) recommendation.element.addEventListener(type, () => { text = recommended(); if (included.checked) note.hidden = true; });
 }
-function field(unresolved: Schema, value: Json | undefined, label: string, description: HTMLElement | null): Editor {
+function field(unresolved: Schema, value: Json | undefined, label: string, description: HTMLElement | null, line = false): Editor {
   const schema = resolve(unresolved);
   const container = element('div', ''); container.className = 'form-field'; container.dataset.field = label;
   if (schema.oneOf !== undefined) {
@@ -114,7 +114,8 @@ function field(unresolved: Schema, value: Json | undefined, label: string, descr
     const properties = schema.properties === undefined ? {} : schema.properties;
     const order = label in CONTENT_FIELDS ? ['status', ...(label === 'Defect' ? ['severity'] : []), ...CONTENT_FIELDS[label as ItemKind]]
       : unresolved.$ref === '#/$defs/cq_api_Evidence' ? ['description', 'origin', 'citations'] : Object.keys(properties);
-    const fields = order.map(key => ({ key, editor: field(required(properties[key], key), jsonObject(value)[key], key, null) }));
+    const tierReason = unresolved.$ref === '#/$defs/cq_api_TierRecommendation';
+    const fields = order.map(key => ({ key, editor: field(required(properties[key], key), jsonObject(value)[key], key, null, tierReason && key === 'reason') }));
     const metadata = element('div', ''); metadata.className = 'form-metadata';
     for (const entry of fields) {
       if (['status', 'severity'].includes(entry.key)) metadata.append(entry.editor.element);
@@ -150,11 +151,11 @@ function field(unresolved: Schema, value: Json | undefined, label: string, descr
     const caption = element('label', fieldLabel(label)); caption.prepend(checkbox); container.append(caption); return { element: container, read: () => checkbox.checked };
   }
   if (schema.type === 'string' || schema.type === 'integer') {
-    // A recommendation's reason is one line: a single-line input cannot hold a line break.
-    if (label === 'reason' && schema.type === 'string') {
-      const line = element('input', ''); line.type = 'text'; line.setAttribute('aria-label', label); line.value = value === undefined || value === null ? '' : String(value);
-      const named = element('label', fieldLabel(label)); named.append(line); container.append(named);
-      return { element: container, read: () => line.value };
+    // A Task's tier reason is one line: a single-line input cannot hold a line break. A Question's reason may be several.
+    if (line && schema.type === 'string') {
+      const single = element('input', ''); single.type = 'text'; single.setAttribute('aria-label', label); single.value = value === undefined || value === null ? '' : String(value);
+      const named = element('label', fieldLabel(label)); named.append(single); container.append(named);
+      return { element: container, read: () => single.value };
     }
     const input = element('textarea', ''); input.rows = label === 'title' || ['value', 'path', 'hash', 'repository', 'address', 'version', 'component', 'revision'].includes(label) ? 1 : 3;
     input.setAttribute('aria-label', label); input.value = value === undefined || value === null ? '' : String(value);
