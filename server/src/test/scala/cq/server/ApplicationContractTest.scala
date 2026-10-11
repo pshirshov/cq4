@@ -433,7 +433,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         def read(authority: Authority, target: ProjectId) = call(authority, target, AgentsAction.Read())
         def view(result: Result): AgentsView = result match { case Result.Agents(value) => value; case found => fail(s"Expected an agent configuration, got $found") }
         def replace(authority: Authority, scope: AgentsScope, expected: Revision, text: String) = call(authority, project, AgentsAction.Replace(scope, expected, text))
-        def resolve(authority: Authority, harness: Harness, work: DispatchWork) = call(authority, project, AgentsAction.Resolve(harness, work))
+        def resolve(authority: Authority, harness: Harness, work: DispatchWork) = call(authority, project, AgentsAction.Resolve(harness, work, Nil))
         def parsed(text: String): ParsedAgents = AgentConfigText.parse(text).fold(problems => fail(problems.toString), identity)
         val Installation = AgentsScope.Installation()
         val Project = AgentsScope.Project()
@@ -531,7 +531,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           _ <- assertIO(cleared.project.revision == Revision(3) && cleared.project.text.isEmpty && cleared.project.change.nonEmpty &&
             cleared.assignments == AgentResolution.assignments(parsed(defaults), ParsedAgents.empty))
           foreign <- read(granted(Role.Worker), other)
-          foreignRoute <- call(granted(Role.Governor), other, AgentsAction.Resolve(Harness.Claude, DispatchWork.Planner()))
+          foreignRoute <- call(granted(Role.Governor), other, AgentsAction.Resolve(Harness.Claude, DispatchWork.Planner(), Nil))
           _ <- assertIO(List(foreign, foreignRoute).forall { case Result.Failed(_: Fault.Denied) => true; case _ => false })
           // The server default holds for every project; the override is the project's own.
           separate <- read(root, other).map(view)
@@ -540,6 +540,76 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           requirements <- application.execute(root, Command.Requirements(RequirementsInput(project, RequirementsAction.Read())))
           _ <- assertIO(requirements == Result.Requirements(ProjectRequirements(project, Revision(0), "", None)))
           _ <- assertIO(!new McpSchemas().tools.exists(_.name.toLowerCase.contains("agent")))
+        } yield ()
+    }
+
+    "I27: resolve the Worker at the tier the assigned Tasks recommend, the highest of a cohort, and leave other work and unrecommended Tasks as configured" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val auth = authorization(Now)
+        val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
+        val project = ProjectId(UUID.randomUUID())
+        val tiers = "harnesses:\n  claude: { tiers: { frontier: [opus, opus-2], standard: [sonnet], fast: [haiku, haiku-2] } }\n"
+        val standard = "defaults:\n  roles:\n    worker: $harness:@standard\n" + tiers
+        val exact = "defaults:\n  roles:\n    worker: claude:sonnet-exact\n" + tiers
+        val unnamed = "defaults:\n  roles:\n    worker: claude:sonnet-exact\n    reviewer: $harness:@frontier\n" + tiers
+        def recommending(tier: Option[ModelTier], status: TaskStatus = TaskStatus.Ready): ItemDraft = ItemDraft("Task", "body", Set.empty, false,
+          Content.Task(status, List("Observable"), None, Nil, tier.map(TierRecommendation(_, "because"))), Nil)
+        def call(action: AgentsAction) = application.execute(root, Command.Agents(AgentsInput(project, action)))
+        def configure(text: String, expected: Long) = call(AgentsAction.Replace(AgentsScope.Project(), Revision(expected), text))
+        def routes(result: Result): List[String] = result match {
+          case Result.AgentRoute(ResolvedAssignment(_, _, RoleResolution.Resolved(plan))) => plan.seats.flatMap(_.candidates.map(_.model))
+          case found => fail(s"Expected a resolved route, got $found")
+        }
+        def resolve(work: DispatchWork, members: List[ItemRevision]) = call(AgentsAction.Resolve(Harness.Claude, work, members))
+        val implement = DispatchWork.Worker(WorkerMode.Implement)
+        for {
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "Tiers")))
+          _ <- configure(standard, 0)
+          created <- application.execute(root, Command.Change(ChangeInput(project, ChangeRequest(RequestId(UUID.randomUUID()),
+            List(Some(ModelTier.Fast), Some(ModelTier.Frontier), None, None, Some(ModelTier.Standard)).map(tier => Mutation.Create(recommending(tier))) :+
+              Mutation.Create(ItemDraft("Idea", "body", Set.empty, false, Content.Idea(IdeaStatus.Proposed, "", "m"), Nil)), Nil, "Create"))))
+          items = created match { case Result.Changed(ack) => ack.items; case found => fail(s"Expected created items, got $found") }
+          List(fast, frontier, none, other, mid, idea) = items
+          configured <- resolve(implement, Nil)
+          _ <- assertIO(routes(configured) == List("sonnet"))
+          // Single Task.
+          single <- resolve(implement, List(fast))
+          _ <- assertIO(routes(single) == List("haiku", "haiku-2"))
+          unrecommended <- resolve(implement, List(none))
+          _ <- assertIO(unrecommended == configured)
+          // Cohorts: highest, none recommended, mixed under a tier entry, order independence.
+          both <- resolve(implement, List(fast, frontier))
+          reversed <- resolve(implement, List(frontier, fast))
+          _ <- assertIO(routes(both) == List("opus", "opus-2") && reversed == both)
+          neither <- resolve(implement, List(none, other))
+          _ <- assertIO(neither == configured)
+          mixed <- resolve(implement, List(fast, none))
+          _ <- assertIO(routes(mixed) == List("sonnet"))
+          mixedHigh <- resolve(implement, List(frontier, none))
+          _ <- assertIO(routes(mixedHigh) == List("opus", "opus-2"))
+          // A member that is not a Task counts as one without a recommendation.
+          notTask <- resolve(implement, List(fast, idea))
+          _ <- assertIO(notTask == mixed)
+          // Other work resolves as with no members.
+          others = List(DispatchWork.Planner(), DispatchWork.Explorer(ExplorerMode.Investigate), DispatchWork.Reviewer(ReviewerMode.Plan), DispatchWork.Reviewer(ReviewerMode.Candidate),
+            DispatchWork.Reviewer(ReviewerMode.Audit), DispatchWork.Worker(WorkerMode.Probe), DispatchWork.Worker(WorkerMode.ResolveConflict))
+          equal <- ZIO.foreach(others)(work => resolve(work, Nil).zip(resolve(work, List(fast))).map { case (without, with_) => without == with_ })
+          _ <- assertIO(equal.forall(identity))
+          // A missing revision names the item.
+          missing <- resolve(implement, List(ItemRevision(fast.id, Revision(fast.revision.value + 5))))
+          _ <- assertIO(missing match { case Result.Failed(Fault.Missing(message)) => message.contains(s"${fast.id.number}"); case _ => false })
+          // Changed tier: the revision decides.
+          replaced <- application.execute(root, Command.Change(ChangeInput(project, ChangeRequest(RequestId(UUID.randomUUID()),
+            List(Mutation.Replace(fast.id, fast.revision, recommending(Some(ModelTier.Frontier)))), Nil, "Raise"))))
+          raised = replaced match { case Result.Changed(ack) => ack.items.head; case found => fail(s"Expected a change, got $found") }
+          now <- resolve(implement, List(raised))
+          before <- resolve(implement, List(fast))
+          _ <- assertIO(routes(now) == List("opus", "opus-2") && routes(before) == List("haiku", "haiku-2"))
+          // An exact model wins whatever the Tasks recommend.
+          _ <- configure(exact, 1)
+          pinned <- ZIO.foreach(List(List(fast), List(fast, none), List(frontier, fast)))(members => resolve(implement, members).map(routes))
+          _ <- assertIO(pinned.forall(_ == List("sonnet-exact")))
         } yield ()
     }
 

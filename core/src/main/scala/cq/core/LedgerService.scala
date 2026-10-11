@@ -16,7 +16,8 @@ trait LedgerService[F[_, _]] {
   // The view that storing `text` as the document of `layer` would give; nothing is stored.
   def previewAgents(scope: Scope, layer: AgentsScope, text: String): F[Throwable, AgentsView]
   def replaceAgents(scope: Scope, layer: AgentsScope, expected: Revision, text: String): F[Throwable, AgentsView]
-  def agentRoute(scope: Scope, harness: Harness, work: DispatchWork): F[Throwable, ResolvedAssignment]
+  // `members` are the assigned member revisions; for Worker Implement work their recommended tiers decide the tier of the resolution.
+  def agentRoute(scope: Scope, harness: Harness, work: DispatchWork, members: List[ItemRevision]): F[Throwable, ResolvedAssignment]
   def change(scope: Scope, request: ChangeRequest): F[Throwable, ChangeAck]
   def get(scope: Scope, id: ItemId): F[Throwable, ItemView]
   def details(scope: Scope, members: List[ItemRevision], bytes: Int): F[Throwable, ItemViews]
@@ -180,11 +181,27 @@ object LedgerService {
       agentsView(installationAgents(tx), projectAgents(tx))
     }
 
-    override def agentRoute(scope: Scope, harness: Harness, work: DispatchWork): F[Throwable, ResolvedAssignment] = repository.transact(scope.project) { tx =>
+    override def agentRoute(scope: Scope, harness: Harness, work: DispatchWork, members: List[ItemRevision]): F[Throwable, ResolvedAssignment] = repository.transact(scope.project) { tx =>
       // Every stored text passed the save checks, so one that does not parse is not a state this release writes.
       def parsed(name: String, document: AgentsDocument): ParsedAgents = AgentConfigText.parse(document.text).fold(problems => throw new IllegalStateException(
         s"The stored agent configuration of the $name does not parse: " + problems.map(AgentConfigText.describe).mkString("; ")), identity)
-      AgentResolution.resolve(parsed("installation", installationAgents(tx)), parsed("project", projectAgents(tx)), harness, work)
+      val installation = parsed("installation", installationAgents(tx))
+      val project = parsed("project", projectAgents(tx))
+      if (work != DispatchWork.Worker(WorkerMode.Implement) || members.isEmpty) AgentResolution.resolve(installation, project, harness, work)
+      else {
+        // The recommendation of each member at the assigned revision; anything but a Task with one counts as no recommendation.
+        val recommended = members.map { member =>
+          inScope(scope, member.id)
+          val draft = tx.historical(member.id, member.revision).map(_.item.item.draft)
+            .orElse(tx.get(member.id).filter(_.revision == member.revision).map(_.draft))
+            .getOrElse(throw DomainFailure(Fault.Missing(s"Missing ${LedgerPolicy.prefix(member.id.ledger)}${member.id.number} at revision ${member.revision.value}")))
+          draft.content match {
+            case task: Content.Task => task.recommendation.map(_.tier)
+            case _ => None
+          }
+        }
+        AgentResolution.resolve(installation, project, harness, work, AgentResolution.cohortTier(installation, project, harness, recommended))
+      }
     }
 
     override def change(scope: Scope, request: ChangeRequest): F[Throwable, ChangeAck] =

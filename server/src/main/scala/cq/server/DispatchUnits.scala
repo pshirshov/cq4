@@ -82,8 +82,8 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
   }
 
   // Read when the unit starts and never kept: a configuration saved during a session applies to the next unit.
-  private def resolve(work: DispatchWork): (RoleKey, ResolvedRole) =
-    authority.governor.call(Command.Agents(AgentsInput(project, AgentsAction.Resolve(governing, work)))) match {
+  private def resolve(assigned: AssignedWork): (RoleKey, ResolvedRole) =
+    authority.governor.call(Command.Agents(AgentsInput(project, AgentsAction.Resolve(governing, assigned.work, assigned.members)))) match {
       case Result.AgentRoute(ResolvedAssignment(_, key, RoleResolution.Resolved(plan))) =>
         // A route that names no provider runs on the provider of the settings entry of its harness.
         key -> plan.copy(seats = plan.seats.map(seat => seat.copy(candidates = seat.candidates.map(route =>
@@ -115,7 +115,7 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
   def start(work: AssignedWork, selection: Option[SelectedDispatch]): Task[DispatchStatus] = started(work, _.worker.isInstanceOf[UnitWorker.Models], ZIO.attemptBlocking {
     ChildContracts.request(project, template(work))
     SupervisorConfig.within(work.limits, config.settings.limits)
-    val (key, plan) = resolve(work.work)
+    val (key, plan) = resolve(work)
     UnitWorker.Models(key, plan, selection)
   }).flatMap(status)
 

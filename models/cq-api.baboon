@@ -736,7 +736,7 @@ root adt AgentsAction {
   data Replace { scope: AgentsScope expected: Revision text: str }
   // The unsaved text of one layer against the other layer as stored.
   data Preview { scope: AgentsScope text: str }
-  data Resolve { harness: Harness work: DispatchWork }
+  data Resolve { harness: Harness work: DispatchWork members: lst[ItemRevision] }
 }
 root data AgentsInput { project: ProjectId action: AgentsAction }
 root data AgentsDocument { revision: Revision text: str change: opt[RequirementsChange] problems: lst[AgentProblem] }

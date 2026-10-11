@@ -202,6 +202,28 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
   }
 
   "Automatic cohort selection (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "I27: offer the same Tasks together whatever tier they recommend, since tier is not a grouping key" in { (ledger: LedgerService[IO]) =>
+      def recommending(tier: Option[ModelTier]): ItemDraft = task.copy(content = Content.Task(TaskStatus.Ready, List("Independent acceptance"), None, Nil,
+        tier.map(TierRecommendation(_, "because"))))
+      def offered(tiers: List[Option[ModelTier]]) = {
+        val scope = owner
+        for {
+          runtime <- ZIO.runtime[Any]
+          _ <- ledger.initialize(scope, "Tier is not a key")
+          created <- ledger.change(scope, ChangeRequest(RequestId(uuid), tiers.map(tier => Mutation.Create(recommending(tier))), Nil, "Tasks"))
+          planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
+          input = request(created.items.map(_.id).toSet, DispatchWork.Planner())
+          selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+          decision = selected.evidence.decision
+        } yield (decision.choices.map(_.members.map(_.id.number).sorted).sortBy(_.mkString(",")), decision.counts, selected.evidence.considered.map(_.reason).sortBy(_.toString))
+      }
+      for {
+        plain <- offered(List(None, None, None))
+        tiered <- offered(List(Some(ModelTier.Fast), Some(ModelTier.Frontier), None))
+        _ <- assertIO(plain._1.nonEmpty && tiered == plain)
+      } yield ()
+    }
+
     "offer an explicit completed root for planning its reopening without executing or rediscovering completed work" in { (ledger: LedgerService[IO]) =>
       val scope = owner
       val completed = task.copy(content = Content.Task(TaskStatus.Done, List("Independent acceptance"), None, Nil, None))
