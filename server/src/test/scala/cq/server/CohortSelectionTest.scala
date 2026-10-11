@@ -123,6 +123,27 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
   }
 
   private final case class Published(result: ChildResult, id: ArtifactId)
+  private def shape(choices: List[CohortChoice]): Set[(DispatchWork, Set[ItemId], CohortReason)] =
+    choices.map(choice => (choice.work, choice.members.map(_.id).toSet, choice.reason)).toSet
+
+  // Stores an assessment of two Tasks, revises the first as `kind` says and plans the Worker offer; returns the member ids and the choices.
+  private def revisedOffer(ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+    runtime: Runtime[Any], kind: String, compatibility: CohortCompatibility): IO[Throwable, (List[ItemId], List[CohortChoice])] = for {
+    fixture <- assessed(ledger, usage, artifacts, admissions, 2, compatibility)
+    view <- ledger.get(fixture.scope, fixture.members.head.id)
+    revised = view.item.draft.content match {
+      case value: Content.Task if kind == "tier" => view.item.draft.copy(content = value.copy(recommendation = Some(TierRecommendation(ModelTier.Fast, "Mechanical"))))
+      case value: Content.Task if kind == "tier and reason" => view.item.draft.copy(content = value.copy(recommendation = Some(TierRecommendation(ModelTier.Frontier, "Subtle"))))
+      case _ => view.item.draft.copy(body = "Changed behavior")
+    }
+    changed <- ledger.change(fixture.scope, ChangeRequest(RequestId(uuid), List(Mutation.Replace(view.item.id, view.item.revision, revised)), List(fixture.fence), "Revise"))
+    reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+    planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, new CohortProgress, new OperatorRequirements(""))
+    input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement))
+    decided <- ZIO.attemptBlocking(planner.plan(input.copy(artifacts = List(fixture.artifact)), ArtifactId(uuid)))
+    _ <- ZIO.attempt(assert(changed.items.head.revision != view.item.revision))
+  } yield (fixture.members.map(_.id), decided.evidence.decision.choices)
+
   private def goal: ItemDraft = task.copy(title = "Goal", content = Content.Goal(GoalStatus.Open, "Outcome", List("Goal acceptance"), "Scope"))
   private def milestone: ItemDraft = task.copy(title = "Milestone", content = Content.Milestone(MilestoneStatus.Open, "Release"))
   private final case class Organised(scope: Scope, goal: ItemId, milestone: ItemId, tasks: List[ItemId])
@@ -266,41 +287,35 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
-    "I27: a tier-only change of a Task keeps its stored assessment; any other change does not" in {
+    "I27: a tier-only change of a Task keeps a stored Compatible assessment" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
         runtime <- ZIO.runtime[Any]
-        outcomes <- ZIO.foreach(List(
-          ("tier", CohortCompatibility.Compatible), ("tier and reason", CohortCompatibility.Compatible), ("body", CohortCompatibility.Compatible),
-          ("tier", CohortCompatibility.Incompatible), ("tier", CohortCompatibility.Unknown))) { (kind, compatibility) => for {
-          fixture <- assessed(ledger, usage, artifacts, admissions, 2, compatibility)
-          view <- ledger.get(fixture.scope, fixture.members.head.id)
-          revised = view.item.draft.content match {
-            case value: Content.Task if kind == "tier" => view.item.draft.copy(content = value.copy(recommendation = Some(TierRecommendation(ModelTier.Fast, "Mechanical"))))
-            case value: Content.Task if kind == "tier and reason" => view.item.draft.copy(content = value.copy(recommendation = Some(TierRecommendation(ModelTier.Frontier, "Subtle"))))
-            case _ => view.item.draft.copy(body = "Changed behavior")
-          }
-          changed <- ledger.change(fixture.scope, ChangeRequest(RequestId(uuid), List(Mutation.Replace(view.item.id, view.item.revision, revised)), List(fixture.fence), "Revise"))
-          reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
-          planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, new CohortProgress, new OperatorRequirements(""))
-          input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement))
-          decided <- ZIO.attemptBlocking(planner.plan(input.copy(artifacts = List(fixture.artifact)), ArtifactId(uuid)))
-          _ <- assertIO(changed.items.head.revision != view.item.revision)
-        } yield (kind, compatibility, fixture.members.map(_.id), decided.evidence.decision.choices) }
-        shape = (choices: List[CohortChoice]) => choices.map(choice => (choice.work, choice.members.map(_.id).toSet, choice.reason)).toSet
-        (_, _, compatibleIds, compatible) = outcomes(0)
-        _ <- ZIO.attempt(assert(shape(compatible) == Set((Implement, compatibleIds.toSet, CohortReason.CompatibleAssessment)), compatible.toString))
-        (_, _, reasonIds, reason) = outcomes(1)
-        _ <- ZIO.attempt(assert(shape(reason) == Set((Implement, reasonIds.toSet, CohortReason.CompatibleAssessment)), reason.toString))
-        // Any other change of the draft is treated as before: the revised group needs a new assessment.
-        (_, _, bodyIds, body) = outcomes(2)
-        _ <- ZIO.attempt(assert(shape(body) == Set((DispatchWork.Planner(), bodyIds.toSet, CohortReason.AssessmentRequired)), body.toString))
-        (_, _, incompatibleIds, incompatible) = outcomes(3)
+        tier <- revisedOffer(ledger, usage, artifacts, admissions, runtime, "tier", CohortCompatibility.Compatible)
+        both <- revisedOffer(ledger, usage, artifacts, admissions, runtime, "tier and reason", CohortCompatibility.Compatible)
+        _ <- ZIO.attempt(assert(shape(tier._2) == Set((Implement, tier._1.toSet, CohortReason.CompatibleAssessment)), tier._2.toString))
+        _ <- ZIO.attempt(assert(shape(both._2) == Set((Implement, both._1.toSet, CohortReason.CompatibleAssessment)), both._2.toString))
+      } yield ()
+    }
+
+    "I27: a tier-only change of a Task keeps a stored Incompatible or Unknown assessment" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        incompatible <- revisedOffer(ledger, usage, artifacts, admissions, runtime, "tier", CohortCompatibility.Incompatible)
+        unknown <- revisedOffer(ledger, usage, artifacts, admissions, runtime, "tier", CohortCompatibility.Unknown)
         // The members are offered separately to the Worker, never to a Planner: the first carries the verdict, the other is then plain.
-        _ <- ZIO.attempt(assert(shape(incompatible).map(value => (value._1, value._2)) == incompatibleIds.map(id => (Implement, Set(id))).toSet &&
-          incompatible.exists(_.reason == CohortReason.IncompatibleAssessment), incompatible.toString))
-        (_, _, unknownIds, unknown) = outcomes(4)
-        _ <- ZIO.attempt(assert(shape(unknown).map(value => (value._1, value._2)) == unknownIds.map(id => (Implement, Set(id))).toSet &&
-          unknown.exists(_.reason == CohortReason.UnknownAssessment), unknown.toString))
+        _ <- ZIO.attempt(assert(shape(incompatible._2).map(value => (value._1, value._2)) == incompatible._1.map(id => (Implement, Set(id))).toSet &&
+          incompatible._2.exists(_.reason == CohortReason.IncompatibleAssessment), incompatible._2.toString))
+        _ <- ZIO.attempt(assert(shape(unknown._2).map(value => (value._1, value._2)) == unknown._1.map(id => (Implement, Set(id))).toSet &&
+          unknown._2.exists(_.reason == CohortReason.UnknownAssessment), unknown._2.toString))
+      } yield ()
+    }
+
+    "I27: a change of the body of a Task invalidates its stored assessment as before" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        body <- revisedOffer(ledger, usage, artifacts, admissions, runtime, "body", CohortCompatibility.Compatible)
+        // Any other change of the draft is treated as before: the revised group needs a new assessment.
+        _ <- ZIO.attempt(assert(shape(body._2) == Set((DispatchWork.Planner(), body._1.toSet, CohortReason.AssessmentRequired)), body._2.toString))
       } yield ()
     }
 
