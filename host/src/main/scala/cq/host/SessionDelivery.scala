@@ -50,7 +50,7 @@ object SessionDelivery {
       children.exists(child => !has(child, "receipt.json") && (has(child, "publication.json") || !delivered(child.resolve("delivery")))) ||
       checks.exists(check => !has(check, "result.json") || !delivered(check.resolve("delivery"))) ||
       samples.exists(sample => !delivered(sample.resolve("delivery"))) ||
-      entries(directory.resolve("spans")).exists(unacknowledged) ||
+      entries(directory.resolve("spans")).exists(unacknowledged) || SpanDelivery.unfinished(directory.resolve("spans")) ||
       OperatorWaits.pending(directory, run.project.project)
     SessionRemainder(undelivered, unticketed.size + partialChecks.size + partialSamples.size)
   }
@@ -71,7 +71,7 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
   private def inventory(directory: Path, run: SupervisorRun): Inventory = {
     require(run.assignment.project == run.project.project && run.attempt.assignment == run.assignment.id &&
       run.attempt.parent.isEmpty && run.attempt.role == Role.Governor, "Invalid governing publication identity")
-    val governing = Publication(run.assignment, run.attempt, Some(run.harnessVersion), None, new DeliveryQueue(directory.resolve("delivery")), None, false)
+    val governing = Publication(run.assignment, run.attempt, Some(run.harnessVersion), None, new DeliveryQueue(directory.resolve("delivery"), new DeliverySync), None, false)
     val root = directory.resolve("children")
     val (children, incomplete) = if (!Files.exists(root)) (Nil, Nil) else {
       require(Files.isDirectory(root) && !Files.isSymbolicLink(root), "Child delivery root must be a directory")
@@ -99,7 +99,7 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
            else ticket.attempt.role == ChildContracts.role(ticket.request.work)) && ticket.attempt.harness == ticket.request.harness &&
           ticket.profile.forall(_.harness == ticket.attempt.harness),
           "Child delivery ticket has another assignment or governing owner")
-        Publication(ticket.assignment, ticket.attempt, HarnessUsage.launchable(ticket.profile).map(_.version), Some(ticket.request.limits.retainedOutputBytes), new DeliveryQueue(child.resolve("delivery")),
+        Publication(ticket.assignment, ticket.attempt, HarnessUsage.launchable(ticket.profile).map(_.version), Some(ticket.request.limits.retainedOutputBytes), new DeliveryQueue(child.resolve("delivery"), new DeliverySync),
           Some(new ChildPublicationDelivery(child, ticket)), GoverningTickets.own(ticket))
       }
       (publications, incomplete)
@@ -240,7 +240,8 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
             ticket.check.retainedOutputBytes > 0 && ticket.check.retainedOutputBytes <= 1024 * 1024 && ticket.fingerprint.matches("[0-9a-f]{64}") &&
             ticket.workspace == WorkspaceSpec(run.project.project, run.attempt.session, id, run.repository, native.workspace.base),
             "Declared check ticket differs from its owner, configuration or reviewed candidate")
-          val pending = new DeclaredCheckPublication(path, ticket, publication.assignment.id, directory.resolve("payload"))
+          val pending = new DeclaredCheckPublication(path, ticket, publication.assignment.id, directory.resolve("payload"),
+            Some(new SpanDelivery(directory.resolve("spans"), run.project.project, new DeliverySync)))
           pending.reconcile(record)
           SessionDeliveryReport(pending.finish(api).acknowledged, Nil)
         }
@@ -279,7 +280,8 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
     }
     attached <- (if (run.ownership == SessionOwnership.Attached) ZIO.attemptBlocking(new AttachedUsage(directory, run, clock).recover(api)) else ZIO.succeed(SessionDeliveryReport(0, Nil))).either
     codex <- ZIO.attemptBlocking(Using.resource(new AttachedCodexUsage(directory, run, new CodexRollout, clock))(_.recover(api))).either
-    spans <- ZIO.attemptBlocking(SessionDeliveryReport(new SpanDelivery(directory.resolve("spans"), run.project.project).flush(api), Nil)).either
+    // The owner is gone: a span it started and never finished ends here as Unknown, after every publication above had its say.
+    spans <- ZIO.attemptBlocking(SessionDeliveryReport(new SpanDelivery(directory.resolve("spans"), run.project.project, new DeliverySync).close(api, clock.millis()), Nil)).either
     waits <- ZIO.attemptBlocking(SessionDeliveryReport(OperatorWaits.recover(directory, run.project.project, api), Nil)).either
     recovered <- independent(checked ++ delivered.map(_.map(count => SessionDeliveryReport(count, Nil))) ++ List(attached, codex, spans, waits))
   } yield SessionDeliveryReport(recovered.map(_.acknowledged).sum, inventory.incompleteTickets ++ recovered.flatMap(_.incompleteTickets))

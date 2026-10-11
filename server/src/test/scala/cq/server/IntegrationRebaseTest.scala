@@ -99,7 +99,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
       profile = HarnessSetting(Harness.Codex, directory.resolve("fixture-harness").toString, "fixture-model", "fixture-provider", "0.156.1", Nil, Set.empty)
       settings = SupervisorSettings(directory.toString, guardian.binary.toString, List(profile), limits, checks, None, Some(Target))
       run = SupervisorRun(project, assignment, governor, profile.version, local.source.toString, local.base, SessionOwnership.Managed)
-      config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", None, guardian.environment)
+      config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", None, guardian.environment, new DeliverySync)
       collectorAuthority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, expires)).value, None)
       governorAuthority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, owner.actor, expires)).value, None)
       authority = SupervisorAuthority(new Receiver(application, auth, root, root, runtime, new AtomicInteger(0)),
@@ -316,8 +316,10 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
             val checked = resolved.phases.find(_.phase == UsagePhase.Check)
             println(s"Integration spans: check=${checked.map(value => (value.spans, value.wallMillis))} integrate=$integrated window=${ended - began} ms")
             assert(ready.phase == IntegrationPhase.Ready && recorded.phase == IntegrationPhase.Recorded && records.size == 3, s"$ready $recorded")
-            // Preparation alone records its check runs; the integration's own span stays open until it resolves.
-            assert(prepared.phases.find(_.phase == UsagePhase.Check) == checked && prepared.phases.forall(_.phase != UsagePhase.Integrate) && open.isEmpty, prepared.toString)
+            // Preparation records its check runs; the integration's own span is Running from the preparation until it resolves.
+            assert(prepared.phases.find(_.phase == UsagePhase.Check) == checked, prepared.toString)
+            assert(prepared.phases.find(_.phase == UsagePhase.Integrate).exists(value => value.spans == 1 && value.runningSpans == 1 && value.wallMillis == 0), prepared.toString)
+            assert(open.exists(value => value.state == AttemptState.Running && value.finishedAt == value.startedAt), open.toString)
             assert(checked.exists(value => value.attempts == 0 && value.spans == 2 && value.wallMillis == checks.map(run => run.updatedAt - run.createdAt).sum &&
               value.wallMillis >= 600), checked.toString)
             assert(integrated.exists(value => value.assignment == f.worker && value.session == f.owner.actor.session && value.phase == UsagePhase.Integrate &&
@@ -350,7 +352,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
         report <- usage.phases(f.owner, UsageFilter.TaskOnly(f.members.head.id))
         _ <- ZIO.attempt {
           println(s"Unapplied integration spans: failed=$failed cancelled=$cancelled")
-          assert(refused.phase == IntegrationPhase.NotApplied && abandoned.phase == IntegrationPhase.Ready && before.isEmpty, s"$refused $abandoned $before")
+          assert(refused.phase == IntegrationPhase.NotApplied && abandoned.phase == IntegrationPhase.Ready && before.exists(_.state == AttemptState.Running), s"$refused $abandoned $before")
           assert(failed.exists(_.state == AttemptState.Failed) && cancelled.exists(_.state == AttemptState.Cancelled) && failed.get.id != cancelled.get.id)
           assert(report.phases.find(_.phase == UsagePhase.Integrate).exists(_.spans == 2) && report.phases.forall(_.phase != UsagePhase.Check), report.toString)
         }

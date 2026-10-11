@@ -111,7 +111,7 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
     Files.writeString(root.resolve("governor-attempt"), attempt.id.value.toString)
     SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(Limits),
       SupervisorRun(project, assignment, attempt, profile.version, workspace.repository, workspace.base, if (attached) SessionOwnership.Attached else SessionOwnership.Managed),
-      state.fold(root.resolve("session"))(_.resolve(workspace.owner.value.toString)), if (attached) "" else "Fixture governing input", None, sys.env)
+      state.fold(root.resolve("session"))(_.resolve(workspace.owner.value.toString)), if (attached) "" else "Fixture governing input", None, sys.env, new DeliverySync)
   }
 
   /** `cq host` with three settled children, released as their production owners release them unless `RetainProperty` is set, then the attached program on stdin/stdout. */

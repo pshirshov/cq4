@@ -133,9 +133,9 @@ export function phasesTable(phases: readonly api.PhaseUsage[]): HTMLElement {
     columns: [rowLabel('Phase'), number('Known tokens'), number('Unknown measurements'), number('Estimated measurements'), number('Unknown costs'),
       number('Cost'), tally('Attempts'), tally('Running'), tally('Open'), number('Busy wall time')],
     rows: phases.map(entry => [entry.phase, ...values(entry).map(count), costSum(entry.costs, entry.totals.unknownCosts, bases),
-      count(entry.attempts), count(entry.running), count(entry.open), duration(entry.wallMillis)]),
+      count(entry.attempts), count(entry.running + entry.runningSpans), count(entry.open), duration(entry.wallMillis)]),
     total: phases.length > 1 ? ['Total', ...[0, 1, 2, 3].map(index => count(total(entry => values(entry)[index] as bigint))),
-      costSum(costs, total(entry => entry.totals.unknownCosts), bases), count(total(entry => entry.attempts)), count(total(entry => entry.running)),
+      costSum(costs, total(entry => entry.totals.unknownCosts), bases), count(total(entry => entry.attempts)), count(total(entry => entry.running + entry.runningSpans)),
       count(total(entry => entry.open)),
       duration(total(entry => entry.wallMillis))] : undefined }));
 }

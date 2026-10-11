@@ -58,7 +58,7 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
       settings = SupervisorSettings(directory.toString, guardian.binary.toString, List(profile), limits,
         scripts.map { case (name, script) => ValidationCheck(name, List("python3", "-c", script), 10000, 65536, attempts, 0) }, None, None)
       run = SupervisorRun(project, assignment, governor, profile.version, local.source.toString, local.base, SessionOwnership.Managed)
-      config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", None, guardian.environment)
+      config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", None, guardian.environment, new DeliverySync)
       failCancellation = new AtomicBoolean(false)
       journal <- ZIO.acquireRelease(ZIO.attemptBlocking {
         val delegate = FileJobRepository.open(directory.resolve("journal"), project.project, governor.session)
@@ -242,10 +242,14 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
           val records = List(1, 2).map(run => DeclaredCheckPublication.job(f.entry.ticket.attempt.id, "verify", run)).map(job => f.journal.records.find(_.workspace.attempt == job).get)
           println(s"Reviewer check spans: ${f.receiver.spans}")
           assert(complete.evidence.exists(value => value.state == ValidationState.Passed && value.failures.size == 1), complete.toString)
-          assert(f.receiver.spans == records.zip(List(AttemptState.Failed, AttemptState.Completed)).map { case (record, state) =>
+          // Each run is Running from its job's registration and finished once; the finish is what the run's publication carries.
+          val finished = f.receiver.spans.filter(_.state != AttemptState.Running)
+          val started = f.receiver.spans.filter(_.state == AttemptState.Running)
+          assert(finished.distinct == records.zip(List(AttemptState.Failed, AttemptState.Completed)).map { case (record, state) =>
             PhaseSpan(PhaseSpans.check(record, assignment, "verify").id, assignment, f.config.owner.actor.session, UsagePhase.Check, record.createdAt, record.updatedAt, state, Some("verify"), None)
           }, f.receiver.spans.toString)
-          assert(f.receiver.spans.map(_.id).distinct.size == 2 && f.receiver.spans.forall(span => span.finishedAt - span.startedAt >= 200))
+          assert(started.distinct == records.map(record => PhaseSpans.checkStart(record, assignment, "verify")), f.receiver.spans.toString)
+          assert(f.receiver.spans.map(_.id).distinct.size == 2 && finished.forall(span => span.finishedAt - span.startedAt >= 200))
         }
       } yield () }
     }

@@ -135,7 +135,7 @@ final class GovernorWork(config: SupervisorConfig, authority: SupervisorAuthorit
 
   private def worked(entry: DispatchExecution, seat: Seat): Task[Unit] = for {
     trace <- Ref.make(AttemptTrace.Empty)
-    queue <- ZIO.attemptBlocking(new DeliveryQueue(entry.directory.resolve("delivery")))
+    queue <- ZIO.attemptBlocking(new DeliveryQueue(entry.directory.resolve("delivery"), new DeliverySync))
     result <- ZIO.scoped {
       for {
         _ <- registered(entry, queue, seat.work)
@@ -166,7 +166,7 @@ final class GovernorWork(config: SupervisorConfig, authority: SupervisorAuthorit
   } yield ()
 
   private def reviewed(entry: DispatchExecution, seat: Seat, verdicts: List[ReviewMember]): Task[Unit] = for {
-    queue <- ZIO.attemptBlocking(new DeliveryQueue(entry.directory.resolve("delivery")))
+    queue <- ZIO.attemptBlocking(new DeliveryQueue(entry.directory.resolve("delivery"), new DeliverySync))
     result <- (registered(entry, queue, seat.work) *> settlement.stored(entry, seat.work.base, Some(seat.work.base),
       ChildReport.Review(verdicts, None), seat.work.validation, RetainedEvidence(Nil, Nil))).either
     _ <- settlement.publish(entry, result, AttemptTrace.Empty)

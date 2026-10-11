@@ -203,7 +203,7 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
   private def phases(value: PhaseReport): Unit = {
     table(List("Phase", "Attempts", "Running", "Open", "Spans", "Wall h:mm:ss", "Input", "Output", "Cache read", "Cache write", "Reasoning", "Total", "Unknown costs"),
       value.phases.map { entry =>
-        List(entry.phase.toString, entry.attempts.toString, entry.running.toString, entry.open.toString, entry.spans.toString, duration(entry.wallMillis),
+        List(entry.phase.toString, entry.attempts.toString, (entry.running + entry.runningSpans).toString, entry.open.toString, entry.spans.toString, duration(entry.wallMillis),
           metric(entry.totals.input), metric(entry.totals.output), metric(entry.totals.cacheRead), metric(entry.totals.cacheWrite),
           metric(entry.totals.reasoning), metric(entry.totals.total), entry.totals.unknownCosts.toString)
       })

@@ -198,9 +198,13 @@ object UsageService {
       invalid((value.phase == UsagePhase.Await) == value.await.isDefined, "Only a span of a wait on the operator carries the awaited item, and it must")
       value.await match {
         case None =>
-          invalid(value.state != AttemptState.Running, "Invalid span outcome or times")
-          if (!same(tx.span(value.id), value)) tx.putSpan(value, scope.actor, clock.millis())
-          value
+          // A running host span has not finished: its finish time is its start time, so it adds no wall time.
+          invalid(value.state != AttemptState.Running || value.finishedAt == value.startedAt, "A running span has not finished")
+          HostSpans.admit(tx.span(value.id), value) match {
+            case AwaitedSpans.Store => tx.putSpan(value, scope.actor, clock.millis()); value
+            case AwaitedSpans.Existing(stored) => stored
+            case AwaitedSpans.Refused(fault) => throw DomainFailure(fault)
+          }
         case Some(wait) =>
           invalid(wait.item.project == scope.project && wait.blocked.forall(_.project == scope.project), "A wait stays within its authenticated project")
           invalid(wait.blocked.size <= UsageService.MaxBlocked, "A wait names at most 200 blocked items")
@@ -285,7 +289,7 @@ object UsageService {
       PhaseReport(UsagePhase.all.filter(phase => tallies.contains(phase) || spans.contains(phase)).map { phase =>
         val tally = tallies.getOrElse(phase, PhaseTally(0, 0, 0, 0))
         val span = spans.getOrElse(phase, SpanTally(phase, 0, 0, 0))
-        PhaseUsage(phase, tally.attempts, span.spans, Math.addExact(tally.running, span.running), tally.open, Math.addExact(tally.wallMillis, span.wallMillis), totals.getOrElse(phase, UsageMath.zeroTotals),
+        PhaseUsage(phase, tally.attempts, span.spans, tally.running, span.running, tally.open, Math.addExact(tally.wallMillis, span.wallMillis), totals.getOrElse(phase, UsageMath.zeroTotals),
           costs.take(ReadBatch).filter(_.phase == phase).map(_.total))
       }, costs.size > ReadBatch, reader.truncatedWaits(value), reader.cursor)
     }

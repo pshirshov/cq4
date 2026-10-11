@@ -7,7 +7,7 @@ import scala.jdk.CollectionConverters.*
 import scala.util.Using
 
 /** Files stay immutable after acknowledgement, so interrupted replay has the same identities. */
-final class DeliveryQueue(root: Path) {
+final class DeliveryQueue(root: Path, sync: DeliverySync) {
   private val MaxBatchBytes = 16 * 1024 * 1024
   private val MaxBatches = 512
   private val MaxSessionBytes = 512L * 1024 * 1024
@@ -17,11 +17,14 @@ final class DeliveryQueue(root: Path) {
   private val staging = root.resolve("staging")
   HostFiles.directory(root)
 
-  private def locked[A](operation: => A): A = Using.resource(FileChannel.open(root.resolve("delivery.lock"),
+  // Within a process the operations of one queue wait for each other, so a short retention never fails against a snapshot being taken;
+  // another process still finds the queue in use.
+  private val monitor = sync.monitor(root)
+  private def locked[A](operation: => A): A = monitor.synchronized(Using.resource(FileChannel.open(root.resolve("delivery.lock"),
     StandardOpenOption.CREATE, StandardOpenOption.WRITE)) { channel =>
     val lock = try Option(channel.tryLock()) catch { case _: OverlappingFileLockException => None }
     Using.resource(lock.getOrElse(throw new IllegalStateException("Delivery queue is already in use")))(_ => operation)
-  }
+  })
   private def batches(directory: Path): List[Path] = Using.resource(Files.list(directory)) { stream =>
     val found = stream.iterator().asScala.filter(_.getFileName.toString.endsWith(".json")).take(MaxBatches + 1).toList
     require(found.size <= MaxBatches, "Delivery queue exceeds its batch bound")
@@ -81,14 +84,28 @@ final class DeliveryQueue(root: Path) {
       forceRoot()
     }
   }
-  def flush(api: ServerApi): Int = locked {
-    var delivered = 0
+  /** Sends every unacknowledged batch while the queue's lock is held, so nothing is enqueued meanwhile. */
+  def flush(api: ServerApi): Int = locked(deliver(snapshot(), api))
+  /** Takes the list of batches under the lock and sends them outside it: a batch enqueued while the server is slow is retained at once
+    * and sent by the next call. Delivery is idempotent on the server, and a receipt is written with identical content by any sender. */
+  def send(api: ServerApi): Int = deliver(locked(snapshot()), api)
+  /** As `send`, for the one batch at `sequence` only: it neither waits for nor retries the batches before it. A finish is sent this way,
+    * so a start the server holds up or refused never delays it; the server accepts a finish without a start and replays the start
+    * that follows. */
+  def send(api: ServerApi, sequence: Int): Int =
+    deliver(locked(snapshot()).filter(_.getFileName.toString == f"$sequence%06d.json"), api)
+  private def snapshot(): List[Path] = {
     val ready = batches(root) ++ finalBatches
     require(ready.size <= MaxBatches && ready.map(Files.size(_)).sum <= MaxSessionBytes, "Delivery queue exceeds its session bounds")
+    ready
+  }
+  private def deliver(ready: List[Path], api: ServerApi): Int = {
+    var delivered = 0
     ready.foreach { path =>
       val receipt = path.resolveSibling(path.getFileName.toString.stripSuffix(".json") + ".ack")
       if (Files.exists(receipt)) require(HostFiles.text(receipt, 32) == "acknowledged\n", "Invalid delivery acknowledgement")
-      else {
+      // A batch another sender of this process has in flight is left to it: a stalled delivery never holds up the batches behind it.
+      else if (sync.begin(path)) try {
         val batch = HostFiles.read(path, DeliveryBatch_JsonCodec, MaxBatchBytes)
         require(batch.entries.nonEmpty && batch.entries.size <= MaxEntries, "Invalid stored delivery batch")
         batch.entries.foreach {
@@ -97,8 +114,23 @@ final class DeliveryQueue(root: Path) {
         }
         HostFiles.immutable(receipt, "acknowledged\n", 32)
         delivered += 1
-      }
+      } finally sync.end(path)
     }
     delivered
   }
+}
+
+/** In-process coordination of the queues of one session: the monitor of a queue directory, the batches being sent and the lock of a
+  * span's queue. One instance is shared by every holder of the same queues (`SupervisorConfig.delivery`); an instance of its own
+  * coordinates nothing beyond itself, and another process still finds a queue in use through its file lock. */
+final class DeliverySync {
+  private val monitors = new java.util.concurrent.ConcurrentHashMap[String, Object]()
+  private val sending = java.util.concurrent.ConcurrentHashMap.newKeySet[String]()
+  private val spans = new java.util.concurrent.ConcurrentHashMap[java.util.UUID, Object]()
+  private def key(path: Path): String = path.toAbsolutePath.normalize.toString
+  def monitor(directory: Path): Object = monitors.computeIfAbsent(key(directory), _ => new Object)
+  /** Claims a batch for sending; false when another sender has it in flight. */
+  def begin(batch: Path): Boolean = sending.add(key(batch))
+  def end(batch: Path): Unit = sending.remove(key(batch))
+  def span(id: java.util.UUID): Object = spans.computeIfAbsent(id, _ => new Object)
 }

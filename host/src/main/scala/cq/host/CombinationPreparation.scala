@@ -64,6 +64,8 @@ final class CombinationPreparation(api: ServerApi, owner: Scope, governor: Attem
       case _ => throw new IllegalStateException("Combination claim renewal returned an unexpected result")
     }
   }
+  /** The original worker the ticket's source integration names, read before the preparation claims or observes anything. */
+  def worker(ticket: CombinationTicket): ArtifactId = bounded(call => source(call, ticket).worker)
   def prepare(ticket: CombinationTicket, observe: GitCommit => GitCommit): CombinationPlan = bounded { call =>
     val intent = source(call, ticket)
     renew(call, ticket.fence, intent.members)

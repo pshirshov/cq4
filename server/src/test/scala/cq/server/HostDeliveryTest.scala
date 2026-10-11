@@ -186,7 +186,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
       val root = Files.createTempDirectory("cq-session-spans-")
       val p = project
       val session = SessionId(UUID.randomUUID())
-      val delivery = new SpanDelivery(root.resolve("spans"), p)
+      val delivery = new SpanDelivery(root.resolve("spans"), p, new DeliverySync)
       val receiver = new Receiver
       assert(delivery.flush(receiver) == 0)
       val id = IntegrationId(UUID.randomUUID())
@@ -199,7 +199,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
       intercept[IllegalArgumentException](delivery.retain(span.copy(finishedAt = 4001)))
       intercept[IOException](delivery.send(span, receiver))
       delivery.retain(other)
-      assert(new SpanDelivery(root.resolve("spans"), p).flush(receiver) == 2)
+      assert(new SpanDelivery(root.resolve("spans"), p, new DeliverySync).flush(receiver) == 2)
       assert(receiver.spans.toSet == Set(span, other) && receiver.spans.count(_ == span) == 2)
       assert(delivery.flush(receiver) == 0 && delivery.send(span, receiver) == 0 && receiver.spans.size == 3)
 
@@ -421,7 +421,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
 
     "replay the same immutable batch after lost acknowledgement and preserve receipts across reopening" in {
       val directory = Files.createTempDirectory("cq-delivery-")
-      val queue = new DeliveryQueue(directory)
+      val queue = new DeliveryQueue(directory, new DeliverySync)
       val upload = ArtifactUpload(project, ArtifactId(UUID.randomUUID()), attempt, ArtifactKind.Result, "text/plain", "retained λ")
       val batch = DeliveryBatch(List(HostDelivery.Artifact(upload)))
       queue.enqueue(0, batch)
@@ -431,9 +431,9 @@ final class HostDeliveryLocal extends AnyWordSpec {
       intercept[IOException](queue.flush(receiver))
       assert(receiver.values == Map(upload.id -> upload) && receiver.calls == 1)
       assert(!Files.exists(directory.resolve("000000.ack")))
-      assert(new DeliveryQueue(directory).flush(receiver) == 1)
+      assert(new DeliveryQueue(directory, new DeliverySync).flush(receiver) == 1)
       assert(receiver.values == Map(upload.id -> upload) && receiver.calls == 2)
-      assert(new DeliveryQueue(directory).flush(receiver) == 0 && receiver.calls == 2)
+      assert(new DeliveryQueue(directory, new DeliverySync).flush(receiver) == 0 && receiver.calls == 2)
       assert(Files.getPosixFilePermissions(directory.resolve("000000.json")) == PosixFilePermissions.fromString("rw-------"))
       Files.writeString(directory.resolve("000000.ack"), "invalid")
       intercept[IllegalArgumentException](queue.flush(receiver))
@@ -441,7 +441,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
 
     "ignore uncommitted staging and replay a sealed complete publication after lost acknowledgement" in {
       val directory = Files.createTempDirectory("cq-final-delivery-")
-      val queue = new DeliveryQueue(directory)
+      val queue = new DeliveryQueue(directory, new DeliverySync)
       val p = project
       val a = attempt
       val abandoned = ArtifactUpload(p, ArtifactId(UUID.randomUUID()), a, ArtifactKind.Transcript, "text/plain", "uncommitted")
@@ -457,7 +457,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
       queue.commit(entries)
       assert(queue.finalized && !Files.exists(directory.resolve("staging")))
       intercept[IOException](queue.flush(receiver))
-      val reopened = new DeliveryQueue(directory)
+      val reopened = new DeliveryQueue(directory, new DeliverySync)
       reopened.commit(entries)
       assert(reopened.finalized && reopened.flush(receiver) == 2)
       assert(receiver.values == uploads.map(value => value.id -> value).toMap && receiver.calls == count + 1)
@@ -556,7 +556,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
 object PublicationDurabilityCheck {
   def main(arguments: Array[String]): Unit = {
     val root = Path.of(arguments(0))
-    val queue = new DeliveryQueue(root)
+    val queue = new DeliveryQueue(root, new DeliverySync)
     val project = ProjectId(UUID.randomUUID())
     val attempt = AttemptId(UUID.randomUUID())
     val upload = ArtifactUpload(project, ArtifactId(UUID.randomUUID()), attempt, ArtifactKind.Transcript, "text/plain", "retained")

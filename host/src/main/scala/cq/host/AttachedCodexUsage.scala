@@ -184,7 +184,7 @@ final class AttachedCodexUsage(directory: Path, run: SupervisorRun, source: Code
     }
   }
   private def publish(api: ServerApi, bound: CodexUsageBinding): Int = samples.values.toList.sortBy(_.position).map { value =>
-    val queue = new DeliveryQueue(samplePath(value).resolve("delivery"))
+    val queue = new DeliveryQueue(samplePath(value).resolve("delivery"), new DeliverySync)
     if (!queue.finalized) queue.commit(deliveries(value, bound))
     queue.flush(api)
   }.sum

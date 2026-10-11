@@ -35,7 +35,7 @@ final class SessionLifetimeLocal extends AnyWordSpec {
     val limits = HostLimits(3000, 1000, 300, 2000, 262144)
     val settings = SupervisorSettings("/unused/state", "/unused/guardian", List(profile), limits, Nil, None, None)
     val run = SupervisorRun(project, assignment, attempt, profile.version, "/unused/repository", GitCommit("0" * 40), ownership)
-    SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, Path.of("/unused/session"), "", None, Map.empty)
+    SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, Path.of("/unused/session"), "", None, Map.empty, new DeliverySync)
   }
 
   "Session lifetime (Behavioral Active Blackbox; manual time)" should {

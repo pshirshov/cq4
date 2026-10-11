@@ -1,6 +1,7 @@
 package cq.server
 
 import cq.api.*
+import scala.jdk.CollectionConverters.*
 import cq.core.*
 import cq.host.*
 import distage.{Activation, DIKey, ModuleDef}
@@ -264,7 +265,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
       profile = HarnessSetting(Harness.Codex, directory.resolve("fixture-harness").toString, "fixture-model", "fixture-provider", Version, Nil, Set.empty)
       settings = SupervisorSettings(directory.toString, guardian.binary.toString, List(profile), limits, checks, None, target)
       run = SupervisorRun(project, assignment, governor, profile.version, local.source.toString, local.base, SessionOwnership.Managed)
-      config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", None, guardian.environment)
+      config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", None, guardian.environment, new DeliverySync)
       collectorAuthority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, expires)).value, None)
       governorAuthority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, owner.actor, expires)).value, None)
       authority = SupervisorAuthority(new Receiver(application, auth, root, root, runtime), new Receiver(application, auth, root, collectorAuthority, runtime),
@@ -855,9 +856,10 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
           assert(status.phase == RevalidationPhase.Completed && status.validation.map(_.state) == List(ValidationState.Passed), status.toString)
           assert(after.spans == 3 && after.wallMillis == before.wallMillis + round.updatedAt - round.createdAt, after.toString)
           assert(session.phases.find(_.phase == UsagePhase.Check).contains(after) && revalidated.phases.find(_.phase == UsagePhase.Work) == admitted.phases.find(_.phase == UsagePhase.Work))
-          // The round's span was retained in the session's own queue before it was sent; the worker's check spans travelled with its publication.
+          // Each check's span was retained in the session's own queue, its start then its finish, before it was sent: the worker's two
+          // candidate checks and the round. The worker's check spans also travelled with its publication.
           val retained = scala.util.Using.resource(Files.list(f.config.directory.resolve("spans")))(_.toList)
-          assert(retained.size == 1 && Files.exists(retained.get(0).resolve("000000.ack")), retained.toString)
+          assert(retained.size == 3 && retained.asScala.forall(queue => Files.exists(queue.resolve("000000.ack")) && Files.exists(queue.resolve("000001.ack"))), retained.toString)
         }
       } yield () } }
     }

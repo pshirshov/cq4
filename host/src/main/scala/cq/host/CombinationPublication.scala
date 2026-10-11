@@ -73,7 +73,7 @@ final class CombinationPublication(root: Path, owner: Scope, governor: AttemptId
     val plan = read(id)
     val upload = ArtifactUpload(owner.project, CombinationPlans.artifact(plan), governor, ArtifactKind.Combination,
       "application/json", HostFiles.encode(CombinationPlan_JsonCodec, plan))
-    val queue = new DeliveryQueue(directory(id).resolve("delivery"))
+    val queue = new DeliveryQueue(directory(id).resolve("delivery"), new DeliverySync)
     queue.enqueue(0, DeliveryBatch(List(HostDelivery.Artifact(upload))))
     queue.flush(api)
     CombinationPlans.preview(plan)

@@ -57,7 +57,7 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
     }
     def settings(run: SupervisorRun): SupervisorConfig = SupervisorConfig(
       SupervisorSettings(root.toString, "/unused/guardian", List(profile), limits, Nil, None, None), run.project, SupervisorConfig.profile(profile),
-      SupervisorConfig.limits(limits), run, root.resolve(run.attempt.session.value.toString), "", None, sys.env)
+      SupervisorConfig.limits(limits), run, root.resolve(run.attempt.session.value.toString), "", None, sys.env, new DeliverySync)
     /** The startup recovery of a new session of this project; its receipt is read back from that session's directory. */
     def recover(bounds: WorkspaceCleanup.Bounds): Task[WorkspaceCleanupReceipt] = {
       val config = settings(run(project, local.source.toString))
@@ -98,7 +98,7 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
     def recovery: Option[SessionRecovery] = Option.when(Files.exists(marker))(HostFiles.read(marker, SessionRecovery_JsonCodec, 65536))
     /** Commits and acknowledges the governing final publication, as a host that finished in order leaves it. */
     def finish(): Unit = {
-      val queue = new DeliveryQueue(directory.resolve("delivery"))
+      val queue = new DeliveryQueue(directory.resolve("delivery"), new DeliverySync)
       queue.commit(List(HostDelivery.Usage(HostUsageInput(run.project.project, HostUsage.Finish(AttemptOutcome(RequestId(uuid), run.attempt.id, AttemptState.Unknown, 2000, Nil, None))))))
       queue.flush(new Receiver)
     }
@@ -344,7 +344,7 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
         span <- ZIO.attemptBlocking {
           ended.finish()
           val span = PhaseSpan(RequestId(uuid), ended.run.assignment.id, ended.run.attempt.session, UsagePhase.Check, 1000, 2000, AttemptState.Cancelled, None, None)
-          new SpanDelivery(ended.directory.resolve("spans"), ended.run.project.project).retain(span)
+          new SpanDelivery(ended.directory.resolve("spans"), ended.run.project.project, new DeliverySync).retain(span)
           ended.directory.resolve("spans").resolve(span.id.value.toString)
         }
         receipt <- state.recover(WorkspaceCleanup.Default)

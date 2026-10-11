@@ -6,12 +6,13 @@ import java.nio.file.{Files, Path}
 final case class DeclaredCheckReceipt(status: DeclaredCheckStatus, acknowledged: Int)
 
 /** One run of a declared check; the ticket's `failures` are the observations of the failed runs before it.
-  * The run's job is a Check span on `assignment`, the reviewer's own. */
-final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicket, assignment: AssignmentId, payload: Path) {
+  * The run's job is a Check span on `assignment`, the reviewer's own; its start is registered when the job starts and its finish
+  * retained in `spans` when the run is sealed. */
+final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicket, assignment: AssignmentId, payload: Path, spans: Option[SpanDelivery] = None) {
   private val MaxStatusBytes = 4096
   private val prefix = DeclaredCheckPublication.label(ticket.check.name, ticket.failures.size + 1)
   private val statusFile = directory.resolve("result.json")
-  private val queue = new DeliveryQueue(directory.resolve("delivery"))
+  private val queue = new DeliveryQueue(directory.resolve("delivery"), new DeliverySync)
   private def output(name: String): Path = payload.resolve(ticket.workspace.attempt.value.toString).resolve(name)
   private def bytes(name: String): Array[Byte] = NativeTranscript.retained(output(name), ticket.check.retainedOutputBytes)
   private def size(name: String): Long = if (Files.exists(output(name))) Files.size(output(name)) else 0L
@@ -40,8 +41,11 @@ final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicke
       if (settled && complete) DeclaredCheckPhase.Completed else DeclaredCheckPhase.Unknown, evidence, blocker)
     val summary = ArtifactUpload(project, NativeArtifacts.id(ticket.parent, prefix + "-status"), ticket.parent, ArtifactKind.Transcript,
       "application/json", HostFiles.encode(DeclaredCheckStatus_JsonCodec, status))
+    // The finish is retained beside the run's start before it is sealed, so that recovery never closes a span this publication ends.
+    val span = record.map(value => PhaseSpans.check(value, assignment, ticket.check.name))
+    for (value <- span; queue <- spans) queue.retain(value)
     queue.commit((outParts ++ errParts ++ artifact.toList :+ summary).map(HostDelivery.Artifact.apply) ++
-      record.map(value => PhaseSpans.delivery(project, PhaseSpans.check(value, assignment, ticket.check.name))))
+      span.map(value => PhaseSpans.delivery(project, value)))
     retain(status)
   }
 

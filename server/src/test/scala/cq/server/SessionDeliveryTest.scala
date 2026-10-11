@@ -235,9 +235,9 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         integrated = PhaseSpans.integration(IntegrationId(uuid), worked.id, owner.actor.session, 2000, 9500, AttemptState.Completed)
         combined = PhaseSpans.combination(RequestId(uuid), worked.id, owner.actor.session, 9500, 9600, AttemptState.Unknown)
         _ <- ZIO.attemptBlocking {
-          new DeliveryQueue(directory.resolve("delivery")).commit(List(HostDelivery.Usage(HostUsageInput(owner.project,
+          new DeliveryQueue(directory.resolve("delivery"), new DeliverySync).commit(List(HostDelivery.Usage(HostUsageInput(owner.project,
             HostUsage.Finish(AttemptOutcome(RequestId(uuid), governor.id, AttemptState.Completed, 10000, Nil, None))))))
-          val spans = new SpanDelivery(directory.resolve("spans"), owner.project)
+          val spans = new SpanDelivery(directory.resolve("spans"), owner.project, new DeliverySync)
           List(integrated, combined).foreach(spans.retain)
         }
         receiver = new Receiver(application, authority, runtime, AttemptId(uuid))
@@ -308,10 +308,10 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
               _ <- ZIO.attemptBlocking {
                 HostFiles.directory(child)
                 HostFiles.immutable(child.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, ticket), 65536)
-                val governing = new DeliveryQueue(directory.resolve("delivery"))
+                val governing = new DeliveryQueue(directory.resolve("delivery"), new DeliverySync)
                 governing.commit(List(HostDelivery.Usage(HostUsageInput(owner.project,
                   HostUsage.Finish(AttemptOutcome(RequestId(uuid), governor.id, AttemptState.Completed, 2000, Nil, None))))))
-                val initial = new DeliveryQueue(child.resolve("delivery"))
+                val initial = new DeliveryQueue(child.resolve("delivery"), new DeliverySync)
                 initial.enqueue(0, DeliveryBatch(List(HostDelivery.Usage(HostUsageInput(owner.project, HostUsage.Assign(childAssignment))),
                   HostDelivery.Usage(HostUsageInput(owner.project, HostUsage.Start(attempt))))))
                 val payload = directory.resolve("payload").resolve(attempt.id.value.toString)
@@ -419,11 +419,11 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
               Files.writeString(interruptedTicket.resolve(".upload-cancel.pending"), "stop\n")
               val missing = ticket()
               val committed = ticket()
-              val queue = new DeliveryQueue(directory.resolve("children").resolve(committed.attempt.id.value.toString).resolve("delivery"))
+              val queue = new DeliveryQueue(directory.resolve("children").resolve(committed.attempt.id.value.toString).resolve("delivery"), new DeliverySync)
               queue.enqueue(0, DeliveryBatch(List(HostDelivery.Usage(HostUsageInput(owner.project, HostUsage.Assign(committed.assignment))),
                 HostDelivery.Usage(HostUsageInput(owner.project, HostUsage.Start(committed.attempt))))))
               val artifact = ArtifactUpload(owner.project, NativeArtifacts.id(committed.attempt.id, "result"), committed.attempt.id, ArtifactKind.Result, "text/plain", "Already committed result")
-              val partialEvidence = new DeliveryQueue(directory.resolve("children").resolve(missing.attempt.id.value.toString).resolve("publication-evidence"))
+              val partialEvidence = new DeliveryQueue(directory.resolve("children").resolve(missing.attempt.id.value.toString).resolve("publication-evidence"), new DeliverySync)
               partialEvidence.commit(List(HostDelivery.Artifact(artifact.copy(attempt = missing.attempt.id, id = NativeArtifacts.id(missing.attempt.id, "result")))))
               queue.commit(List(HostDelivery.Artifact(artifact), HostDelivery.Usage(HostUsageInput(owner.project,
                 HostUsage.Finish(AttemptOutcome(RequestId(uuid), committed.attempt.id, AttemptState.Completed, clock.millis(), Nil, None))))))
@@ -532,7 +532,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
               val child = directory.resolve("children").resolve(attempt.id.value.toString)
               HostFiles.directory(child)
               HostFiles.immutable(child.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, DispatchTicket(request, assigned, attempt, Some(profile), None)), 65536)
-              val queue = new DeliveryQueue(child.resolve("delivery"))
+              val queue = new DeliveryQueue(child.resolve("delivery"), new DeliverySync)
               queue.enqueue(0, DeliveryBatch(List(HostDelivery.Usage(HostUsageInput(owner.project, HostUsage.Assign(assigned))),
                 HostDelivery.Usage(HostUsageInput(owner.project, HostUsage.Start(attempt))))))
               queue.commit(List(HostDelivery.Usage(HostUsageInput(owner.project,

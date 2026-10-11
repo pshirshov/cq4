@@ -90,7 +90,7 @@ final class AttachedUsage(directory: Path, run: SupervisorRun, clock: Clock) {
     require(earlier.forall(_.event.session == sample.event.session), "Native Pi session changed within one CQ attempt")
     val previous = earlier.find(value => sameResponse(value.event, sample.event))
     require(previous.forall(value => value.event.copy(sequence = sample.event.sequence) == sample.event), "Conflicting repeated native Pi response")
-    val queue = new DeliveryQueue(path(sample.event.sequence).resolve("delivery"))
+    val queue = new DeliveryQueue(path(sample.event.sequence).resolve("delivery"), new DeliverySync)
     if (!queue.finalized) queue.commit(entries(sample, previous.nonEmpty))
     queue.flush(api)
   }

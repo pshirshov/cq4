@@ -298,7 +298,7 @@ root data UsagePage { entries: lst[RecordedUsage] after: i64 hasMore: bit cursor
 root data AwaitedSpan { item: ItemId blocked: set[ItemId] truncated: bit observation: i64 }
 root data PhaseSpan { id: RequestId assignment: AssignmentId session: SessionId phase: UsagePhase startedAt: i64 finishedAt: i64 state: AttemptState check: opt[str] await: opt[AwaitedSpan] }
 root data RetainedWait { span: PhaseSpan acknowledged: opt[i64] }
-root data PhaseUsage { phase: UsagePhase attempts: i64 spans: i64 running: i64 open: i64 wallMillis: i64 totals: UsageTotals costs: lst[CostTotal] }
+root data PhaseUsage { phase: UsagePhase attempts: i64 spans: i64 running: i64 runningSpans: i64 open: i64 wallMillis: i64 totals: UsageTotals costs: lst[CostTotal] }
 root data PhaseReport { phases: lst[PhaseUsage] costsTruncated: bit truncatedWaits: i64 cursor: i64 }
 root data CheckUsage { check: opt[str] state: AttemptState runs: i64 wallMillis: i64 }
 root data CheckReport { checks: lst[CheckUsage] truncated: bit cursor: i64 }

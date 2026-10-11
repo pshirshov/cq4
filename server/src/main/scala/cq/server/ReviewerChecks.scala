@@ -23,6 +23,8 @@ private[server] final class ReviewerChecks(entry: DispatchExecution, candidate: 
     DeclaredCheckTicket(entry.ticket.attempt.id, declaration,
       WorkspaceSpec(config.project.project, config.run.attempt.session, id, config.run.repository, candidate), command.fingerprint, failures)
   }
+  private val spans = new SessionSpans(config, api)
+  private val retained = new SpanDelivery(config.directory.resolve("spans"), config.project.project, config.delivery)
   private var executions = Map.empty[String, Execution]
   private var closed = Option.empty[List[(Execution, DeclaredCheckStatus)]]
   private var cleanupUncertain = false
@@ -72,10 +74,12 @@ private[server] final class ReviewerChecks(entry: DispatchExecution, candidate: 
       publication <- ZIO.attemptBlocking {
         HostFiles.directory(directory)
         HostFiles.immutable(directory.resolve("ticket.json"), HostFiles.encode(DeclaredCheckTicket_JsonCodec, ticket), 32768)
-        new DeclaredCheckPublication(directory, ticket, entry.ticket.assignment.id, config.directory.resolve("payload"))
+        new DeclaredCheckPublication(directory, ticket, entry.ticket.assignment.id, config.directory.resolve("payload"), Some(retained))
       }
       _ <- ZIO.attempt { entry.check(); require(!stopping, "Reviewer ended before its check started") }
-      _ <- jobs.start(config.owner, ticket.workspace, value.command)
+      started <- jobs.start(config.owner, ticket.workspace, value.command)
+      // Running on the reviewer's assignment from the job's registration; the run's finish is sealed with its publication.
+      _ <- spans.start(PhaseSpans.checkStart(started, entry.ticket.assignment.id, ticket.check.name))
       _ <- if (stopping) cancel(value) else ZIO.unit
       _ <- ZIO.succeed(update(value)(_.copy(phase = DeclaredCheckPhase.Running)))
       record <- jobs.await(config.owner, ticket.workspace.attempt)

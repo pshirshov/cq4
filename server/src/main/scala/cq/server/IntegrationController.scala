@@ -21,12 +21,14 @@ private[server] final class IntegrationExecutionState(val ticket: IntegrationTic
 private[server] final class GovernedIntegrationJobs(owner: Scope, jobs: JobSupervisor, admission: Semaphore) extends IntegrationJobs {
   private var closed = false
   private var admitted = Set.empty[AttemptId]
-  override def execute(workspace: WorkspaceSpec, command: JobCommand): Task[Unit] =
+  override def execute(workspace: WorkspaceSpec, command: JobCommand): Task[Unit] = execute(workspace, command, _ => ZIO.unit)
+  /** `registered` runs with the job's record once it is registered, before the job is awaited. */
+  def execute(workspace: WorkspaceSpec, command: JobCommand, registered: JobRecord => Task[Unit]): Task[Unit] =
     admission.withPermit(ZIO.attempt {
       if (closed) throw new IntegrationAdmissionClosed
       admitted += workspace.attempt
     // The Git job leaves its evidence under checkouts/ and payload/; its tree is never read. A failed removal is retried by the next host startup.
-    } *> jobs.start(owner, workspace, command)).unit *> jobs.await(owner, workspace.attempt).unit *> jobs.release(owner, workspace.attempt).ignore
+    } *> jobs.start(owner, workspace, command)).flatMap(registered) *> jobs.await(owner, workspace.attempt).unit *> jobs.release(owner, workspace.attempt).ignore
   override def status(id: AttemptId): Task[JobRecord] = jobs.status(owner, id)
   def shutdown: Task[Unit] = for {
     ids <- admission.withPermit(ZIO.succeed { closed = true; admitted.toList })
@@ -74,7 +76,8 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
     }
     IntegrationStatus(value.record.intent.id, phase, snapshot(entry).preview, next, blocker.map(DispatchProjection.concise))
   }
-  /** One Integrate span per integration whose members are known, from its preparation request to where the host last worked on it. */
+  /** One Integrate span per integration whose members are known, from its preparation request to where the host last worked on it:
+    * registered Running when its members are known and finished here, once. */
   private def span(entry: IntegrationExecutionState, state: AttemptState): Task[Unit] = ZIO.succeed(synchronized {
     val open = entry.assignment.filter(_ => !entry.spanned)
     entry.spanned = entry.spanned || open.nonEmpty
@@ -131,6 +134,8 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       reviewed <- ZIO.attemptBlocking(preparation.review(ticket))
       assignment <- ZIO.attemptBlocking(PhaseSpans.producer(config.directory, reviewed.workerId))
       _ <- ZIO.succeed(synchronized { entry.assignment = Some(assignment); entry.authorship = Some(reviewed.authorship) })
+      // Its members are known: the integration is recorded from here on, Running until it ends.
+      _ <- spans.start(PhaseSpans.integration(ticket.id, assignment, config.owner.actor.session, entry.startedAt, entry.startedAt, AttemptState.Running))
       // The claim is renewed while host checks of a rebased commit run; a renewal that fails for good stops them.
       renewed = renewal.maintain(began, ZIO.attemptBlocking(preparation.renew(reviewed)))
       rebased <- ZIO.interruptible(rebase(ticket.id, config.settings.integrationTarget.get, reviewed.candidate, spans.check(jobs, execution, assignment)).raceFirst(renewed))

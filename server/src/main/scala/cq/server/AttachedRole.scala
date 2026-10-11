@@ -22,7 +22,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
   private val sessions = new AttachedSessions(location.directory)
   private val MaxRecordBytes = 65536
   private val limits = PeerLimits(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(30), AttachedGateway.FrameBytes, 32)
-  private lazy val queue = new DeliveryQueue(config.directory.resolve("delivery"))
+  private lazy val queue = new DeliveryQueue(config.directory.resolve("delivery"), config.delivery)
   private val recorded = new AtomicReference(Option.empty[SupervisorRun])
   /** Records the session and registers its governing attempt, when the session first does governing work (`AttachedGateway.Methods`).
     * A host whose harness only opened the connection writes nothing into its session directory and tells the server of no attempt (D160).

@@ -78,7 +78,7 @@ final class RecoveryState(val root: Path, val project: ProjectConfig, val reposi
   def settings(run: SupervisorRun, checks: List[ValidationCheck]): SupervisorConfig = {
     val harness = profile(run.attempt.harness)
     SupervisorConfig(SupervisorSettings(root.toString, "/unused/guardian", List(harness), limits, checks, None, Some("refs/heads/integration")), run.project,
-      SupervisorConfig.profile(harness), SupervisorConfig.limits(limits), run, root.resolve(run.attempt.session.value.toString), "", None, sys.env)
+      SupervisorConfig.profile(harness), SupervisorConfig.limits(limits), run, root.resolve(run.attempt.session.value.toString), "", None, sys.env, new DeliverySync)
   }
   def receipt(session: SessionId): Path = root.resolve(session.value.toString).resolve("workspaces").resolve("cleanup.json")
 
@@ -158,7 +158,7 @@ final case class EndedSession(state: RecoveryState, directory: Path, run: Superv
   def reported(receipt: WorkspaceCleanupReceipt): Option[SessionCleanup] = receipt.sessions.find(_.session == id)
   /** Commits and acknowledges the governing final publication, as a host that finished in order leaves it. */
   def finish(): Unit = {
-    val queue = new DeliveryQueue(directory.resolve("delivery"))
+    val queue = new DeliveryQueue(directory.resolve("delivery"), new DeliverySync)
     queue.commit(List(HostDelivery.Usage(HostUsageInput(run.project.project, HostUsage.Finish(AttemptOutcome(RequestId(uuid), run.attempt.id, AttemptState.Unknown, 2000, Nil, None))))))
     queue.flush(new RecoveryServer)
   }

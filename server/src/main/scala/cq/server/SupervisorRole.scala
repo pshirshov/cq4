@@ -23,7 +23,8 @@ final class HarnessRegistry(adapters: Set[HarnessAdapter]) {
 }
 
 final case class SupervisorConfig(settings: SupervisorSettings, project: ProjectConfig, profile: HarnessProfile,
-  limits: ExecutionLimits, run: SupervisorRun, directory: Path, input: String, workflow: Option[WorkflowRequest], environment: Map[String, String]) {
+  limits: ExecutionLimits, run: SupervisorRun, directory: Path, input: String, workflow: Option[WorkflowRequest], environment: Map[String, String],
+  delivery: DeliverySync) {
   val owner: Scope = Scope(project.project, Actor("CQ governor", run.attempt.session, Role.Governor))
   val endpoint: URI = URI.create(project.endpoint)
 }
@@ -139,7 +140,7 @@ object SupervisorConfig {
     val version = new BoundedHostCommand(HarnessEnvironment.isolated(profile, context.environment), Duration.ofSeconds(10), 4096)
       .run(repository, List(profile.executable.toString, "--version"))
     require(version.exit == 0 && version.text.split("[\\s()]+").contains(profile.version), VersionMismatch)
-    SupervisorConfig(settings, project, profile, limits, run, directory, input, workflow, context.environment)
+    SupervisorConfig(settings, project, profile, limits, run, directory, input, workflow, context.environment, new DeliverySync)
   }
 }
 
@@ -255,7 +256,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
           HarnessInvocation(Role.Governor, attempt.id, SupervisorProgram.Instructions, schemas.schema("GoverningReport"),
             List(HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), authority.governorToken),
               HarnessMcp(McpTarget.Local, local.endpoint, access.issue(attempt.id, Role.Governor))), assets))
-        val queue = new DeliveryQueue(config.directory.resolve("delivery"))
+        val queue = new DeliveryQueue(config.directory.resolve("delivery"), config.delivery)
         val initial = DeliveryBatch(List(
           HostDelivery.Usage(HostUsageInput(project, HostUsage.Assign(config.run.assignment))),
           HostDelivery.Usage(HostUsageInput(project, HostUsage.Start(attempt))),

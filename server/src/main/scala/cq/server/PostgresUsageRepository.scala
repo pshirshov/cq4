@@ -193,10 +193,11 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
   override def span(id: RequestId): Option[PhaseSpan] = sql.query("SELECT body::text FROM cq_usage_spans WHERE project_id = ? AND span_id = ?")(identity(_, id.value))(r => Wire.decode(PhaseSpan_JsonCodec, r.getString(1))).headOption
 
   override def putSpan(value: PhaseSpan, actor: Actor, receivedAt: Long): Unit = {
-    // A wait is replaced by its later observation; every other span is written once.
+    // A wait is replaced by its later observation and a running host span by its finish; the service admits nothing else over a stored span.
     sql.execute("INSERT INTO cq_usage_spans(project_id, span_id, assignment_id, session_id, phase, started_at, finished_at, actor, received_at, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?::jsonb) " +
       "ON CONFLICT (project_id, span_id) DO UPDATE SET finished_at = EXCLUDED.finished_at, actor = EXCLUDED.actor, received_at = EXCLUDED.received_at, body = EXCLUDED.body " +
-      "WHERE cq_usage_spans.phase = 'Await' AND EXCLUDED.phase = 'Await'") { s =>
+      "WHERE (cq_usage_spans.phase = 'Await' AND EXCLUDED.phase = 'Await') OR " +
+      "(cq_usage_spans.body->>'state' = 'Running' AND EXCLUDED.body->>'state' <> 'Running')") { s =>
       identity(s, value.id.value); s.setObject(3, value.assignment.value); s.setObject(4, value.session.value); s.setString(5, value.phase.toString)
       s.setLong(6, value.startedAt); s.setLong(7, value.finishedAt); s.setString(8, Wire.encode(Actor_JsonCodec, actor)); s.setLong(9, receivedAt)
       s.setString(10, Wire.encode(PhaseSpan_JsonCodec, value))

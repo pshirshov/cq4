@@ -41,7 +41,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
 
   def run(entry: DispatchExecution): Task[Unit] = (for {
     trace <- Ref.make(AttemptTrace.Empty)
-    queue <- ZIO.attemptBlocking(new DeliveryQueue(entry.directory.resolve("delivery")))
+    queue <- ZIO.attemptBlocking(new DeliveryQueue(entry.directory.resolve("delivery"), new DeliverySync))
     result <- ZIO.scoped {
       for {
         _ <- ZIO.attemptBlocking {

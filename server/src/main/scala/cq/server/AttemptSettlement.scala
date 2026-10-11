@@ -25,6 +25,7 @@ private[server] final class AttemptSettlement(config: SupervisorConfig, authorit
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
   private val partials = new PartialWorkCapture(config)
   private val validation = new HostValidation(config)
+  private val spans = new SessionSpans(config, authority)
   private def directory(attempt: AttemptId): Path = config.directory.resolve("payload").resolve(attempt.value.toString)
   private def transcript(attempt: AttemptId, name: String, bound: Int): Array[Byte] = NativeTranscript.retained(directory(attempt).resolve(name), bound)
   /** The work of a Worker, which leaves a workspace whose content may become a candidate. */
@@ -71,9 +72,11 @@ private[server] final class AttemptSettlement(config: SupervisorConfig, authorit
       ZIO.foreachDiscard(entry.ownedJobs)(id => jobs.cancel(config.owner, id).unit.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit }) *> stopped
   }
 
-  def launch(entry: DispatchExecution, id: AttemptId, base: GitCommit, command: JobCommand): Task[JobRecord] = for {
+  /** `registered` runs with the job's record once it is registered, before the job is awaited. */
+  def launch(entry: DispatchExecution, id: AttemptId, base: GitCommit, command: JobCommand, registered: JobRecord => Task[Unit] = _ => ZIO.unit): Task[JobRecord] = for {
     _ <- ZIO.attempt { entry.check(); entry.active(id) }
-    _ <- jobs.start(config.owner, WorkspaceSpec(config.project.project, config.run.attempt.session, id, config.run.repository, base), command)
+    started <- jobs.start(config.owner, WorkspaceSpec(config.project.project, config.run.attempt.session, id, config.run.repository, base), command)
+    _ <- registered(started)
     _ <- if (entry.stopReason.nonEmpty) jobs.cancel(config.owner, id).unit else ZIO.unit
     record <- jobs.await(config.owner, id)
   } yield record
@@ -106,8 +109,13 @@ private[server] final class AttemptSettlement(config: SupervisorConfig, authorit
     }
 
   private def validate(entry: DispatchExecution, candidate: GitCommit, check: ValidationCheck, index: Int, trace: Ref[AttemptTrace]): Task[ValidationEvidence] = for {
-    validated <- validation(entry.ticket.attempt.id, s"check-$index", candidate, check, (name, id, base, command) => launch(entry, id, base, command).ensuring(release(id).ignore)
-      .tap(record => trace.update(value => value.copy(spans = value.spans :+ PhaseSpans.check(record, entry.ticket.assignment.id, name)))))
+    // The check is a Running span from its job's registration; its finish is retained and sent when the job settles and is published with the attempt.
+    validated <- validation(entry.ticket.attempt.id, s"check-$index", candidate, check, (name, id, base, command) =>
+      launch(entry, id, base, command, record => spans.start(PhaseSpans.checkStart(record, entry.ticket.assignment.id, name))).ensuring(release(id).ignore)
+      .tap { record =>
+        val finish = PhaseSpans.check(record, entry.ticket.assignment.id, name)
+        spans.record(finish).ignore *> trace.update(value => value.copy(spans = value.spans :+ finish))
+      })
     evidence = validated.evidence
     // A check that could not be started ran nothing: its cleanup is not in doubt and the result stands.
     uncertain = evidence.state == ValidationState.Unknown && validated.unrun.isEmpty

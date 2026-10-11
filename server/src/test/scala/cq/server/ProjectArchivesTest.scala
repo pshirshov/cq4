@@ -198,7 +198,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         _ <- usage.span(host, refreshed)
         _ <- usage.span(host, ended)
         before <- usage.phases(owner, UsageFilter.TaskOnly(blocked))
-        _ <- assertIO(before.phases.map(value => (value.phase, value.spans, value.running, value.wallMillis)) == List((UsagePhase.Await, 1L, 1L, 600L)) && before.truncatedWaits == 1)
+        _ <- assertIO(before.phases.map(value => (value.phase, value.spans, value.runningSpans, value.wallMillis)) == List((UsagePhase.Await, 1L, 1L, 600L)) && before.truncatedWaits == 1)
         file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
         manifest <- archives.backup(owner.project, file)
         _ <- assertIO(manifest.entries.exists(entry => entry.table == BackupTable.UsageSpans && entry.rows == 2))
@@ -238,6 +238,36 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         running <- backup(managed)
         _ <- assertIO(open.exists(_.entries.exists(entry => entry.table == BackupTable.UsageAttempts && entry.rows == 1)))
         _ <- assertIO(running.left.exists(_.getMessage.contains("running attempts")))
+      } yield ()
+    }
+
+    "refuse a backup while a check the host started has not finished, as for a running attempt, and carry the finished span" in {
+      (service: LedgerService[IO], usage: UsageService[IO], archives: ProjectArchives) =>
+      val owner = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Governor))
+      val host = owner.copy(actor = owner.actor.copy(role = Role.Collector))
+      val overhead = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
+      def backup: IO[Throwable, Either[Throwable, BackupManifest]] = for {
+        file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+        result <- archives.backup(owner.project, file).either
+        _ <- ZIO.attempt(Files.deleteIfExists(file))
+      } yield result
+      def span(phase: UsagePhase): PhaseSpan = PhaseSpan(RequestId(UUID.randomUUID()), overhead.id, owner.actor.session, phase, 1000, 1000, AttemptState.Running,
+        if (phase == UsagePhase.Check) Some("verify") else None, None)
+      val check = span(UsagePhase.Check)
+      val integration = span(UsagePhase.Integrate)
+      for {
+        _ <- service.initialize(owner, "running host spans")
+        _ <- usage.assign(host, overhead)
+        _ <- usage.span(host, check)
+        refused <- backup
+        _ <- assertIO(refused.left.exists(error => error.getMessage.contains("running attempts") && error.getMessage.contains("running checks")))
+        _ <- usage.span(host, check.copy(finishedAt = 1700, state = AttemptState.Completed))
+        _ <- usage.span(host, integration)
+        stillRunning <- backup
+        _ <- assertIO(stillRunning.isLeft)
+        _ <- usage.span(host, integration.copy(finishedAt = 2000, state = AttemptState.Cancelled))
+        carried <- backup
+        _ <- assertIO(carried.exists(_.entries.exists(entry => entry.table == BackupTable.UsageSpans && entry.rows == 2)))
       } yield ()
     }
 

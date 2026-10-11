@@ -22,7 +22,7 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
     val limits = HostLimits(3000, 1000, 300, 2000, 262144)
     val settings = SupervisorSettings(local.directory.toString, "/unused/guardian", List(profile), limits, Nil, None, Some("refs/heads/integration"))
     val run = SupervisorRun(project, assignment, attempt, profile.version, local.source.toString, local.base, SessionOwnership.Managed)
-    SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, local.directory, "fixture", None, sys.env)
+    SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, local.directory, "fixture", None, sys.env, new DeliverySync)
   }
 
   "Candidate capture (Behavioral Active Blackbox; local Git Good Communication)" should {

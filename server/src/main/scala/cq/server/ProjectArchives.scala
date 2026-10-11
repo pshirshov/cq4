@@ -56,10 +56,13 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock, mode
     val active = sql.query(s"SELECT EXISTS (SELECT 1 FROM ${prefix}cq_claims WHERE project_id = ? AND NOT released AND expires_at > ?) OR " +
       // An attached governing attempt without an outcome is open, not running: no CQ host observes it, and it may never get one.
       s"EXISTS (SELECT 1 FROM ${prefix}cq_usage_attempts WHERE project_id = ? AND effective_outcome IS NULL AND NOT COALESCE((${PersistedAttempts.unobserved("")}), false)) OR " +
+      // A check, an integration or a combination the host registered at its start and has not finished is observed work, as a managed
+      // attempt is; a wait on the operator is not (an attached session's host may never finish it) and is carried as it stands.
+      s"EXISTS (SELECT 1 FROM ${prefix}cq_usage_spans WHERE project_id = ? AND phase <> 'Await' AND body->>'state' = 'Running') OR " +
       s"EXISTS (SELECT 1 FROM ${prefix}cq_integrations WHERE project_id = ? AND jsonb_exists(body->'resolution', 'Pending'))") { s =>
-      s.setObject(1, project.value); s.setLong(2, clock.millis()); s.setObject(3, project.value); s.setObject(4, project.value)
+      s.setObject(1, project.value); s.setLong(2, clock.millis()); s.setObject(3, project.value); s.setObject(4, project.value); s.setObject(5, project.value)
     }(_.getBoolean(1)).head
-    check(!active, "Project has active claims, running attempts or pending integrations; settle work before backup/restore")
+    check(!active, "Project has active claims, running attempts, running checks or pending integrations; settle work before backup/restore")
   }
   private final class Budget {
     private var bytes = 0L

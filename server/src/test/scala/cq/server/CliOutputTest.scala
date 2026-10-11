@@ -44,8 +44,8 @@ final class CliOutputLocal extends AnyWordSpec {
         UsageTotals(metric(input), metric(output), metric(0), metric(0), metric(0), metric(input + output), unknownCosts)
       val cost = CostTotal(CostGroup(Attribution.Direct, "USD", CostBasis.ProviderEstimate, Some("provider-v1")), DecimalAmount("0.3"), 2)
       val report = PhaseReport(List(
-        PhaseUsage(UsagePhase.Work, 2, 0, 0, 0, 3723500, totals(300, 30, 0), List(cost)),
-        PhaseUsage(UsagePhase.Review, 1, 0, 1, 2, 0, totals(50, 5, 1), Nil)), true, 0, 7)
+        PhaseUsage(UsagePhase.Work, 2, 0, 0, 0, 0, 3723500, totals(300, 30, 0), List(cost)),
+        PhaseUsage(UsagePhase.Review, 1, 0, 1, 0, 2, 0, totals(50, 5, 1), Nil)), true, 0, 7)
       val bytes = new ByteArrayOutputStream()
       val session = UUID.randomUUID().toString
       new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Human, List("status", "phases", "--session", session)).result(Result.UsagePhases(report))
@@ -66,9 +66,9 @@ final class CliOutputLocal extends AnyWordSpec {
       val none = MetricTotal(0, 0, 0)
       val empty = UsageTotals(none, none, none, none, none, none, 0)
       val report = PhaseReport(List(
-        PhaseUsage(UsagePhase.Check, 0, 3, 0, 0, 65000, empty, Nil),
-        PhaseUsage(UsagePhase.Combine, 1, 1, 0, 0, 1500, empty, Nil),
-        PhaseUsage(UsagePhase.Integrate, 0, 1, 0, 0, 4000, empty, Nil)), false, 0, 9)
+        PhaseUsage(UsagePhase.Check, 0, 3, 0, 0, 0, 65000, empty, Nil),
+        PhaseUsage(UsagePhase.Combine, 1, 1, 0, 0, 0, 1500, empty, Nil),
+        PhaseUsage(UsagePhase.Integrate, 0, 1, 0, 0, 0, 4000, empty, Nil)), false, 0, 9)
       val bytes = new ByteArrayOutputStream()
       new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Human, List("status", "phases", "--task", "T3")).result(Result.UsagePhases(report))
       val lines = bytes.toString(UTF_8).linesIterator.toList
@@ -127,7 +127,7 @@ final class CliOutputLocal extends AnyWordSpec {
     "I35: the truncated phase report repeats the evaluation scope and scenario in its follow-up command" in {
       val none = MetricTotal(0, 0, 0)
       val empty = UsageTotals(none, none, none, none, none, none, 0)
-      val report = PhaseReport(List(PhaseUsage(UsagePhase.Work, 1, 0, 0, 0, 0, empty, Nil)), true, 0, 1)
+      val report = PhaseReport(List(PhaseUsage(UsagePhase.Work, 1, 0, 0, 0, 0, 0, empty, Nil)), true, 0, 1)
       val bytes = new ByteArrayOutputStream()
       new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Human, List("status", "phases", "--evaluation", "R", "--scenario", "S")).result(Result.UsagePhases(report))
       assert(bytes.toString(UTF_8).linesIterator.exists(line => line.contains("truncated") && line.contains("cq status costs --evaluation R --scenario S")))

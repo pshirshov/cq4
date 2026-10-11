@@ -14,8 +14,8 @@ final class ChildPublicationDelivery(directory: Path, ticket: DispatchTicket) {
   private val MaxDenialBytes = 4096
   private val intent = directory.resolve("publication.json")
   private val denied = directory.resolve("denied.txt")
-  private val evidence = new DeliveryQueue(directory.resolve("publication-evidence"))
-  private val delivery = new DeliveryQueue(directory.resolve("delivery"))
+  private val evidence = new DeliveryQueue(directory.resolve("publication-evidence"), new DeliverySync)
+  private val delivery = new DeliveryQueue(directory.resolve("delivery"), new DeliverySync)
 
   def sealedIntent: Boolean = Files.exists(intent)
   /** The sealed publication: what the child was to publish, with its result when it left one. */

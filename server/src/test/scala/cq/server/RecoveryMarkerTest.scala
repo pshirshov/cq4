@@ -445,7 +445,7 @@ final class RecoveryMarkerLocal extends SpecZIO with AssertZIO {
         after <- ZIO.attemptBlocking {
           val seen = (frozen.markerText, refs(local), Files.exists(entry.resolve("delivery")), state.server.deliveries.get())
           // `cq job upload --session` publishes the frozen plan from its own queue.
-          val queue = new DeliveryQueue(entry.resolve("delivery"))
+          val queue = new DeliveryQueue(entry.resolve("delivery"), new DeliverySync)
           queue.enqueue(0, DeliveryBatch(List(HostDelivery.Artifact(ArtifactUpload(frozen.run.project.project, ArtifactId(uuid), frozen.run.attempt.id, ArtifactKind.Combination,
             "application/json", Files.readString(entry.resolve("plan.json")))))))
           assert(queue.flush(new RecoveryServer) == 1)

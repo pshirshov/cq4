@@ -7,7 +7,7 @@ import distage.Lifecycle
 import java.time.Clock
 import zio.{Promise, Task, ZIO}
 
-/** `assignment` is known once the plan naming the original worker is frozen. */
+/** `assignment` is known once the source integration names the original worker. */
 private[server] final class CombinationExecution(val ticket: CombinationTicket, val ready: Promise[Throwable, Unit],
   var done: Promise[Nothing, Unit], var view: CombinationStatus, var frozen: Boolean, val startedAt: Long) {
   var assignment = Option.empty[AssignmentId]
@@ -32,17 +32,22 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
     require(!entries.values.exists(_.view.phase == CombinationPhase.Preparing), "A combination is active; wait for it to end before starting another")
   }
   private def snapshot(entry: CombinationExecution): CombinationStatus = synchronized(entry.view)
-  /** One Combine span per preparation whose members are known, from its first request to where the host last worked on it. */
+  /** One Combine span per preparation whose members are known, from its first request to where the host last worked on it:
+    * registered Running when its members are known and finished here, once. */
   private def span(entry: CombinationExecution, state: AttemptState): Task[Unit] = ZIO.succeed(synchronized {
     val open = entry.assignment.filter(_ => !entry.spanned)
     entry.spanned = entry.spanned || open.nonEmpty
     open.map(PhaseSpans.combination(entry.ticket.id, _, config.owner.actor.session, entry.startedAt, entry.observedAt, state))
   }).flatMap(ZIO.foreachDiscard(_)(spans.record))
-  /** A published preparation ends its span; one whose publication is pending stays open for its replay, and one that failed
-    * before its plan was frozen has no known members. */
+  /** A published preparation ends its span as Completed and one that failed before its plan was frozen as Failed, at once, so no
+    * Running span outlives an operation the controller counts as quiescent; one whose publication is pending stays open for its
+    * replay. A failure before the members were known has no span (`span` finds no assignment). */
   private def resolved(entry: CombinationExecution): Task[Unit] =
-    ZIO.succeed(synchronized { entry.observedAt = clock.millis(); entry.view.phase == CombinationPhase.Ready })
-      .flatMap(ready => if (ready) span(entry, AttemptState.Completed) else ZIO.unit)
+    ZIO.succeed(synchronized { entry.observedAt = clock.millis(); entry.view.phase }).flatMap {
+      case CombinationPhase.Ready => span(entry, AttemptState.Completed)
+      case CombinationPhase.Failed => span(entry, AttemptState.Failed)
+      case _ => ZIO.unit
+    }
 
   def prepare(ticket: CombinationTicket): Task[CombinationStatus] = ZIO.uninterruptibleMask { restore => for {
     ready <- Promise.make[Throwable, Unit]
@@ -73,13 +78,14 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
         _ <- ZIO.fromEither(written)
         _ <- ZIO.attemptBlocking(publication.retain(ticket))
         _ <- entry.ready.succeed(())
-        plan <- ZIO.attemptBlocking(publication.freeze(ticket) {
-          new CombinationPreparation(authority.governor, config.owner, config.run.attempt.id, config.run.repository, target, clock)
-            .prepare(ticket, candidates.observeTarget)
-        })
-        _ <- ZIO.succeed(synchronized { entry.frozen = true })
-        assignment <- ZIO.attemptBlocking(PhaseSpans.producer(config.directory, plan.worker))
+        preparation = new CombinationPreparation(authority.governor, config.owner, config.run.attempt.id, config.run.repository, target, clock)
+        // The producer is known from the source integration alone: the preparation is recorded, Running, before it claims or observes.
+        worker <- ZIO.attemptBlocking(preparation.worker(ticket))
+        assignment <- ZIO.attemptBlocking(PhaseSpans.producer(config.directory, worker))
         _ <- ZIO.succeed(synchronized { entry.assignment = Some(assignment) })
+        _ <- spans.start(PhaseSpans.combination(ticket.id, assignment, config.owner.actor.session, entry.startedAt, entry.startedAt, AttemptState.Running))
+        plan <- ZIO.attemptBlocking(publication.freeze(ticket)(preparation.prepare(ticket, candidates.observeTarget)))
+        _ <- ZIO.succeed(synchronized { entry.frozen = true })
         preview <- ZIO.attemptBlocking(publication.publish(ticket.id, authority.collector))
         _ <- ZIO.succeed(synchronized { entry.view = CombinationStatus(ticket.id, CombinationPhase.Ready, Some(preview), None) })
       } yield ()

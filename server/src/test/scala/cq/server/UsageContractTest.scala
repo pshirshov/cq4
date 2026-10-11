@@ -568,6 +568,98 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "register a check, an integration and a combination Running at their start and finish each once, counted apart from running attempts" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      val host = collector(owner)
+      val filters = List(UsageFilter.SessionOnly(owner.actor.session), UsageFilter.ProjectAll())
+      def started(assignment: AssignmentId, phase: UsagePhase, at: Long, name: Option[String]): PhaseSpan =
+        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, phase, at, at, AttemptState.Running, name, None)
+      def ended(span: PhaseSpan, at: Long, state: AttemptState): PhaseSpan = span.copy(finishedAt = at, state = state)
+      // spans, running host spans, running attempts and wall time of the row, with the check rows of the same read.
+      def figures(filter: UsageFilter, phase: UsagePhase): IO[Throwable, ((Long, Long, Long, Long), List[(Option[String], AttemptState, Long, Long)])] = for {
+        phases <- usage.phases(owner, filter)
+        checks <- usage.checks(owner, filter)
+        row = phases.phases.find(_.phase == phase).map(value => (value.spans, value.runningSpans, value.running, value.wallMillis)).getOrElse((0L, 0L, 0L, 0L))
+        _ <- assertIO(phases.cursor == checks.cursor)
+        checked = phases.phases.find(_.phase == UsagePhase.Check).map(value => (value.spans, value.wallMillis)).getOrElse((0L, 0L))
+        _ <- assertIO((checks.checks.map(_.runs).sum, checks.checks.map(_.wallMillis).sum) == checked)
+      } yield (row, checks.checks.map(value => (value.check, value.state, value.runs, value.wallMillis)))
+      def everywhere(phase: UsagePhase, row: (Long, Long, Long, Long), checks: List[(Option[String], AttemptState, Long, Long)]): IO[Throwable, Unit] =
+        ZIO.foreachDiscard(filters)(filter => figures(filter, phase).flatMap(value => assertIO(value == ((row, checks)))))
+      for {
+        _ <- ledger.initialize(owner, "running host spans")
+        item <- task(ledger, owner, "Checked task")
+        work <- phased(usage, owner, item, Role.Worker, UsagePhase.Work, 1000)
+        taskFilter = UsageFilter.TaskOnly(item)
+        // The check starts at 10 s.
+        unit = started(work.assignment, UsagePhase.Check, 10000, Some("unit"))
+        before <- usage.cursor(owner)
+        _ <- denied(usage.span(owner, unit))(_.isInstanceOf[Fault.Denied])
+        _ <- denied(usage.span(host, unit.copy(finishedAt = 10001)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.span(host, ended(unit, 9999, AttemptState.Completed)))(_.isInstanceOf[Fault.Invalid])
+        refused <- usage.cursor(owner)
+        _ <- assertIO(refused == before)
+        registered <- usage.span(host, unit)
+        cursor1 <- usage.cursor(owner)
+        _ <- assertIO(registered == unit && cursor1 == before + 1)
+        // Running: counted as a span and as a running span, not as a running attempt, and adds no wall time.
+        _ <- everywhere(UsagePhase.Check, (1, 1, 0, 0), List((Some("unit"), AttemptState.Running, 1, 0)))
+        _ <- figures(taskFilter, UsagePhase.Check).flatMap(value => assertIO(value._1 == ((1L, 1L, 0L, 0L)) && value._2 == List((Some("unit"), AttemptState.Running, 1L, 0L))))
+        _ <- figures(taskFilter, UsagePhase.Work).flatMap(value => assertIO(value._1 == ((0L, 0L, 1L, 0L))))
+        // (b) identical content is the stored span.
+        _ <- usage.span(host, unit).flatMap(stored => assertIO(stored == unit))
+        cursor2 <- usage.cursor(owner)
+        _ <- assertIO(cursor2 == cursor1)
+        // (a) a changed identity field is refused and nothing changes.
+        changes = List(
+          unit.copy(assignment = AssignmentId(UUID.randomUUID())), unit.copy(session = SessionId(UUID.randomUUID())), unit.copy(phase = UsagePhase.Integrate, check = None),
+          unit.copy(check = Some("lint")), unit.copy(check = None), unit.copy(startedAt = 10001, finishedAt = 10001))
+        _ <- ZIO.foreachDiscard(changes) { change => denied(usage.span(host, change))(fault => fault.isInstanceOf[Fault.Invalid] || fault.isInstanceOf[Fault.Missing]) }
+        _ <- denied(usage.span(host, ended(unit.copy(check = Some("lint")), 20000, AttemptState.Completed)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.span(host, ended(unit.copy(startedAt = 9000), 20000, AttemptState.Completed)))(_.isInstanceOf[Fault.Invalid])
+        cursor3 <- usage.cursor(owner)
+        _ <- assertIO(cursor3 == cursor1)
+        _ <- usage.span(host, unit).flatMap(stored => assertIO(stored == unit))
+        _ <- everywhere(UsagePhase.Check, (1, 1, 0, 0), List((Some("unit"), AttemptState.Running, 1, 0)))
+        // (c) the finish at 40 s happens once and adds 30 s.
+        done = ended(unit, 40000, AttemptState.Completed)
+        finishedSpan <- usage.span(host, done)
+        cursor4 <- usage.cursor(owner)
+        _ <- assertIO(finishedSpan == done && cursor4 == cursor1 + 1)
+        _ <- everywhere(UsagePhase.Check, (1, 0, 0, 30000), List((Some("unit"), AttemptState.Completed, 1, 30000)))
+        _ <- figures(taskFilter, UsagePhase.Check).flatMap(value => assertIO(value._1 == ((1L, 0L, 0L, 30000L))))
+        // (d) the start replayed after the finish returns the stored span; (b) the finish replayed changes nothing.
+        _ <- usage.span(host, unit).flatMap(stored => assertIO(stored == done))
+        _ <- usage.span(host, done).flatMap(stored => assertIO(stored == done))
+        cursor5 <- usage.cursor(owner)
+        _ <- assertIO(cursor5 == cursor4)
+        // (e) another finish time or state for a finished span is a conflict.
+        _ <- denied(usage.span(host, ended(unit, 41000, AttemptState.Completed)))(_.isInstanceOf[Fault.Conflict])
+        _ <- denied(usage.span(host, ended(unit, 40000, AttemptState.Failed)))(_.isInstanceOf[Fault.Conflict])
+        _ <- denied(usage.span(host, ended(unit, 20000, AttemptState.Cancelled)))(_.isInstanceOf[Fault.Conflict])
+        cursor6 <- usage.cursor(owner)
+        _ <- assertIO(cursor6 == cursor4)
+        _ <- usage.span(host, unit).flatMap(stored => assertIO(stored == done))
+        _ <- everywhere(UsagePhase.Check, (1, 0, 0, 30000), List((Some("unit"), AttemptState.Completed, 1, 30000)))
+        // A finished span with no earlier start is accepted, as before.
+        direct = ended(started(work.assignment, UsagePhase.Check, 50000, Some("lint")), 52000, AttemptState.Failed)
+        _ <- usage.span(host, direct).flatMap(stored => assertIO(stored == direct))
+        _ <- everywhere(UsagePhase.Check, (2, 0, 0, 32000), List((Some("lint"), AttemptState.Failed, 1, 2000), (Some("unit"), AttemptState.Completed, 1, 30000)))
+        // An integration and a combination live the same way, and a state other than Completed ends them too.
+        integration = started(work.assignment, UsagePhase.Integrate, 60000, None)
+        combination = started(work.assignment, UsagePhase.Combine, 61000, None)
+        _ <- usage.span(host, integration)
+        _ <- usage.span(host, combination)
+        _ <- figures(UsageFilter.SessionOnly(owner.actor.session), UsagePhase.Integrate).flatMap(value => assertIO(value._1 == ((1L, 1L, 0L, 0L))))
+        _ <- figures(UsageFilter.SessionOnly(owner.actor.session), UsagePhase.Combine).flatMap(value => assertIO(value._1 == ((1L, 1L, 0L, 0L))))
+        _ <- usage.span(host, ended(integration, 90000, AttemptState.Unknown))
+        _ <- usage.span(host, ended(combination, 70000, AttemptState.Cancelled))
+        _ <- usage.span(host, combination).flatMap(stored => assertIO(stored.state == AttemptState.Cancelled && stored.finishedAt == 70000))
+        _ <- figures(taskFilter, UsagePhase.Integrate).flatMap(value => assertIO(value._1 == ((1L, 0L, 0L, 30000L))))
+        _ <- figures(taskFilter, UsagePhase.Combine).flatMap(value => assertIO(value._1 == ((1L, 0L, 0L, 9000L))))
+      } yield ()
+    }
+
     "report check runs per check name and state, equal to the Check phase row, with spans without a name as one group" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
       val owner = scope()
       val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
@@ -651,7 +743,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       def observation(span: PhaseSpan, number: Long): PhaseSpan = span.copy(await = span.await.map(_.copy(observation = number)))
       def blockedBy(span: PhaseSpan): Set[ItemId] = span.await.get.blocked
       def row(report: PhaseReport): Option[PhaseUsage] = report.phases.find(_.phase == UsagePhase.Await)
-      def figures(report: PhaseReport): Option[(Long, Long, Long, Long)] = row(report).map(value => (value.attempts, value.spans, value.running, value.wallMillis))
+      def figures(report: PhaseReport): Option[(Long, Long, Long, Long)] = row(report).map(value => (value.attempts, value.spans, value.runningSpans, value.wallMillis))
       for {
         _ <- ledger.initialize(owner, "waits")
         blocked <- task(ledger, owner, "Blocked task")
@@ -670,7 +762,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         _ <- denied(usage.span(host, first.copy(finishedAt = 999)))(_.isInstanceOf[Fault.Invalid])
         _ <- denied(usage.span(host, first.copy(await = None)))(_.isInstanceOf[Fault.Invalid])
         _ <- denied(usage.span(host, first.copy(phase = UsagePhase.Check, check = Some("unit"))))(_.isInstanceOf[Fault.Invalid])
-        _ <- denied(usage.span(host, first.copy(phase = UsagePhase.Check, state = AttemptState.Running, await = None)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.span(host, first.copy(phase = UsagePhase.Check, finishedAt = 1100, state = AttemptState.Running, await = None)))(_.isInstanceOf[Fault.Invalid])
         many = (1001L to 1201L).map(number => ItemId(owner.project, Ledger.Tasks, number)).toSet
         _ <- denied(usage.span(host, first.copy(await = first.await.map(_.copy(blocked = many)))))(_.isInstanceOf[Fault.Invalid])
         _ <- denied(usage.span(host, first.copy(await = first.await.map(_.copy(observation = 0)))))(_.isInstanceOf[Fault.Invalid])

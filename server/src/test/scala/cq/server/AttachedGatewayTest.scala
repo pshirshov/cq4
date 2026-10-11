@@ -37,7 +37,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
       "fixture-provider", "fixture-model", "fixture", 0, UsagePhase.Govern, None)
     private val settings = ProjectConfig(project, "http://localhost", "Attached gateway")
     private val config = SupervisorConfig(null, settings, null, null,
-      SupervisorRun(settings, assignment, attempt, "fixture", "/nonexistent", GitCommit("0" * 40), SessionOwnership.Attached), directory, "", None, Map("HOME" -> "/nonexistent"))
+      SupervisorRun(settings, assignment, attempt, "fixture", "/nonexistent", GitCommit("0" * 40), SessionOwnership.Attached), directory, "", None, Map("HOME" -> "/nonexistent"), new cq.host.DeliverySync)
     private val api = new Api(answer)
     private val gateway = new AttachedGateway(config, SupervisorAuthority(api, api, api, AccessToken("governor", 0)), schemas, null, null, null,
       new AttachedCodexUsage(Path.of("/nonexistent"), config.run, new CodexRollout, java.time.Clock.systemUTC()), null,

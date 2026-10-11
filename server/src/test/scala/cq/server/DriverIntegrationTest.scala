@@ -192,7 +192,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       profile = HarnessSetting(Harness.Codex, directory.resolve("fixture-harness").toString, "fixture-model", "fixture-provider", "0.156.1", Nil, Set.empty)
       settings = SupervisorSettings(directory.toString, guardian.binary.toString, List(profile), limits, Nil, None, Some(Target))
       run = SupervisorRun(project, assignment, governor, profile.version, local.source.toString, local.base, SessionOwnership.Attached)
-      config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", None, guardian.environment)
+      config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", None, guardian.environment, new DeliverySync)
       collectorAuthority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, expires)).value, None)
       governorAuthority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, owner.actor, expires)).value, None)
       quiet = new Collector
@@ -664,7 +664,8 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "cache
           assert(status.phase == IntegrationPhase.NotApplied && status.blocker.contains("Discarded by the governing session") && repeated == discarded, s"$discarded $repeated")
           assert(quiescent && retained == IntegrationLocal(retained.intent, false, Some(IntegrationObservation.NotApplied("Discarded by the governing session"))), retained.toString)
           assert(server.left.exists { case DomainFailure(_: Fault.Missing) => true; case _ => false } && git == local.base, server.toString)
-          assert(spans.map(_.state) == List(AttemptState.Cancelled), spans.toString)
+          // The span was registered Running when the integration's members were known and finished once, as Cancelled.
+          assert(spans.map(_.state) == List(AttemptState.Running, AttemptState.Cancelled) && spans.map(_.id).distinct.size == 1, spans.toString)
           assert(applied.phase == IntegrationPhase.NotApplied && next.isRight, s"$applied $next")
           // A waiter that named the integration is told when it is prepared and again when it is discarded.
           assert(f.unitEvents(ready.id.value) == List("Started", "Ready", "NotApplied"), f.unitEvents(ready.id.value).toString)
