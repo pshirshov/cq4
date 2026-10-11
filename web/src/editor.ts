@@ -150,7 +150,13 @@ function field(unresolved: Schema, value: Json | undefined, label: string, descr
     const caption = element('label', fieldLabel(label)); caption.prepend(checkbox); container.append(caption); return { element: container, read: () => checkbox.checked };
   }
   if (schema.type === 'string' || schema.type === 'integer') {
-    const input = element('textarea', ''); input.rows = label === 'title' || ['value', 'reason', 'path', 'hash', 'repository', 'address', 'version', 'component', 'revision'].includes(label) ? 1 : 3;
+    // A recommendation's reason is one line: a single-line input cannot hold a line break.
+    if (label === 'reason' && schema.type === 'string') {
+      const line = element('input', ''); line.type = 'text'; line.setAttribute('aria-label', label); line.value = value === undefined || value === null ? '' : String(value);
+      const named = element('label', fieldLabel(label)); named.append(line); container.append(named);
+      return { element: container, read: () => line.value };
+    }
+    const input = element('textarea', ''); input.rows = label === 'title' || ['value', 'path', 'hash', 'repository', 'address', 'version', 'component', 'revision'].includes(label) ? 1 : 3;
     input.setAttribute('aria-label', label); input.value = value === undefined || value === null ? '' : String(value);
     const caption = element('label', fieldLabel(label)); caption.append(input); container.append(caption);
     return { element: container, read: () => schema.type === 'integer' ? Number(input.value) : input.value };

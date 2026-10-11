@@ -283,12 +283,16 @@ try {
     // Tier change keeps the reason and everything else.
     const task = await open({ tier: 'Fast', reason: 'Mechanical edit' });
     assert.deepEqual(await read(), base({ tier: 'Fast', reason: 'Mechanical edit' }));
-    const reason = task.locator('textarea[aria-label=reason]');
-    assert.equal(await reason.getAttribute('rows'), '1');
+    const reason = task.locator('input[type=text][aria-label=reason]');
+    assert.equal(await reason.count(), 1, 'the reason is a single-line input');
+    assert.equal(await task.locator('textarea[aria-label=reason]').count(), 0);
     await task.locator('select[aria-label=tier]').selectOption('Frontier');
     assert.deepEqual(await read(), base({ tier: 'Frontier', reason: 'Mechanical edit' }));
     await reason.fill('Needs judgement');
     assert.deepEqual(await read(), base({ tier: 'Frontier', reason: 'Needs judgement' }));
+    await reason.fill('One\nline'); // a line break is not kept by a single-line field
+    assert.equal((await read()).content.Task.recommendation.reason.includes('\n'), false);
+    await reason.fill('Needs judgement');
     // Removal.
     await task.getByRole('checkbox', { name: 'Add recommendation' }).uncheck();
     assert.deepEqual(await read(), base(null));
