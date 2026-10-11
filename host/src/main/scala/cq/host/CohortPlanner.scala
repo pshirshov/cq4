@@ -5,6 +5,7 @@ import cq.core.{CohortBounds, DomainFailure, LedgerPolicy, MilestonePolicy, Scop
 import java.nio.charset.StandardCharsets.UTF_8
 import java.time.Duration
 import java.util.UUID
+import scala.util.chaining.*
 
 final case class CohortPlan(evidence: CohortEvidence, fingerprints: Map[RequestId, CohortExecutionFingerprint])
 
@@ -15,7 +16,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
   private val RequestBytes = 16 * 1024
   private final case class Context(guidance: List[ItemView], artifacts: List[ResolvedArtifact], operative: List[CohortArtifactFingerprint], results: List[AdmittedResult],
     operativeResults: List[CohortResultFingerprint], assessments: List[ExecutedResult], reviews: List[ExecutedResult], previous: Option[ChildResult], base: GitCommit,
-    standing: String, revisions: Map[ItemId, Revision]) {
+    standing: String, revisions: Map[ItemId, Revision], drafts: HistoricalDrafts) {
     def executionBase: GitCommit = previous.flatMap(_.candidate).getOrElse(base)
   }
 
@@ -97,7 +98,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val operative = artifacts.map(value => CohortArtifacts(value, read))
     val operativeResults = sources.map(value => CohortArtifacts.result(value, read))
     Context(guidance.items, artifacts, operative, results, operativeResults, assessments, reviews, previous.map(_.value), base,
-      OperatorRequirements.standing(call, owner.project), revisions)
+      OperatorRequirements.standing(call, owner.project), revisions, new HistoricalDrafts(call, owner.project))
   }
 
   // A base the repository does not hold is no ancestor, so its assessment does not apply. A comparison Git cannot make fails the selection.
@@ -149,11 +150,23 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     context.copy(artifacts = kept.map(_._1), operative = kept.map(_._2))
   }
 
+  // An assessed member revision is the current one when it is the same revision or its draft differs from the current draft only in
+  // the Task recommendation (tier, reason or both): a tier-only change keeps the stored assessment (G15).
+  private def current(assessed: ItemRevision, now: Revision, context: Context): Boolean =
+    assessed.revision == now || ItemRevision(assessed.id, now).pipe(latest => {
+      val (before, after) = (context.drafts.draft(assessed), context.drafts.draft(latest))
+      def bare(draft: ItemDraft): ItemDraft = draft.content match {
+        case task: Content.Task => draft.copy(content = task.copy(recommendation = None))
+        case _ => draft
+      }
+      before.content.isInstanceOf[Content.Task] && after.content.isInstanceOf[Content.Task] && bare(before) == bare(after)
+    })
+
   // Exact revisions precede stale groups; within each class, precedence decides. A group that shares a member with an earlier one is ignored: the newest assessment decides between two verdicts
   // for one group and between two groups that name one Task, so the groups that remain are disjoint.
   private def assessments(context: Context): List[CohortAssessment] = {
     val groups = context.assessments.flatMap(_.result.value.report.asInstanceOf[ChildReport.Plan].assessments)
-    val (exact, stale) = groups.partition(_.members.forall(member => context.revisions.get(member.member.id).contains(member.member.revision)))
+    val (exact, stale) = groups.partition(_.members.forall(member => context.revisions.get(member.member.id).exists(now => current(member.member, now, context))))
     (exact ++ stale).foldLeft(List.empty[CohortAssessment]) { (kept, next) =>
       val ids = next.members.map(_.member.id).toSet
       if (kept.exists(_.members.exists(member => ids(member.member.id)))) kept else kept :+ next
@@ -161,15 +174,16 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
   }
 
   private def compatibility(members: List[ItemView], context: Context): Option[CohortCompatibility] = {
-    val refs = members.map(value => ItemRevision(value.item.id, value.item.revision)).toSet
-    assessments(context).find(_.members.map(_.member).toSet == refs).map(_.compatibility)
+    val refs = members.map(value => value.item.id -> value.item.revision).toMap
+    assessments(context).find(group => group.members.size == refs.size && group.members.forall(member =>
+      refs.get(member.member.id).exists(now => current(member.member, now, context)))).map(_.compatibility)
   }
 
   private def assessedGroup(first: ItemView, pending: List[ItemView], request: CohortRequest, context: Context): Option[List[ItemView]] = {
-    val current = pending.map(value => value.item.id -> value).toMap
+    val present = pending.map(value => value.item.id -> value).toMap
     val candidates = assessments(context).map(_.members.map(_.member).toSet).distinct.filter(refs =>
-      refs.exists(_.id == first.item.id) && refs.forall(ref => current.contains(ref.id)))
-    val exact = candidates.filter(_.forall(ref => current(ref.id).item.revision == ref.revision))
+      refs.exists(_.id == first.item.id) && refs.forall(ref => present.contains(ref.id)))
+    val exact = candidates.filter(_.forall(ref => current(ref, present(ref.id).item.revision, context)))
     val groups = (if (exact.nonEmpty) exact else candidates).map(_.map(_.id)).distinct
       .map(ids => pending.filter(value => ids(value.item.id)))
       .filter(group => independent(group) && fits(request, request.work, group, context))
