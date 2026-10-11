@@ -62,6 +62,15 @@ object ProposalPolicy {
               }
             }
           }
+          values.foreach { value =>
+            value.content match {
+              case c: Content.Task =>
+                invalid(c.recommendation.nonEmpty, s"Produced Task \"${value.title}\" requires a recommended model tier (fast, standard or frontier) and a reason: the tier is missing")
+                invalid(c.recommendation.forall(_.reason.trim.nonEmpty),
+                  s"Produced Task \"${value.title}\" requires a recommended model tier (fast, standard or frontier) and a reason: the reason is missing")
+              case _ => ()
+            }
+          }
           Mutation.Produce(producer, revision(producer), values.map(draft), milestone)
         case (ProposedMutation.Reference(source, relation, target, present), _) =>
           endpoints(canonical(source, relation, target))

@@ -19,7 +19,10 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
   private final case class Published(result: ChildResult, artifact: ArtifactMetadata)
   private def uuid: UUID = UUID.randomUUID()
   private def task: ItemDraft = ItemDraft("Proposal task", "PRIVATE_DRAFT " + "x" * 4096, Set.empty, false,
-    Content.Task(TaskStatus.Ready, List("Preserve assignment and atomicity"), None, Nil, None), Nil)
+    Content.Task(TaskStatus.Ready, List("Preserve assignment and atomicity"), None, Nil,
+      Some(TierRecommendation(ModelTier.Standard, "Ordinary scoped change"))), Nil)
+  private def unrated(title: String, recommendation: Option[TierRecommendation]): ItemDraft = task.copy(title = title, content =
+    Content.Task(TaskStatus.Ready, List("Preserve assignment and atomicity"), None, Nil, recommendation))
   private def research: ItemDraft = task.copy(title = "Proposal research", content = Content.Research(ResearchStatus.Open, "What remains unknown?", Nil, None, None))
   private def milestone(status: MilestoneStatus): ItemDraft = task.copy(title = s"$status milestone", content = Content.Milestone(status, "Deliver the proposed tasks"))
 
@@ -368,6 +371,43 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
         recorded <- proposals.preview(f.owner, value.artifact.id)
         replayed <- proposals(f.owner, value.artifact.id)
         _ <- assertIO(recorded == shown && replayed == ack)
+      } yield ()
+    }
+
+    "reject produced Tasks without a tier or a reason, for planners and reviewers alike, and leave other drafts alone" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) =>
+      def missing(title: String, part: String): Fault = Fault.Invalid(
+        s"Produced Task \"$title\" requires a recommended model tier (fast, standard or frontier) and a reason: the $part is missing")
+      def milestoneOf(open: ItemId) = Some(MilestoneRef.Existing(open))
+      for {
+        f <- begin(ledger, usage)
+        existing <- ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(milestone(MilestoneStatus.Open))), Nil, "Milestone outside the assignment"))
+        open = existing.items.head.id
+        producer = f.members.head.id
+        cases = List(
+          unrated("No tier", None) -> missing("No tier", "tier"),
+          unrated("Blank reason", Some(TierRecommendation(ModelTier.Fast, " \t "))) -> missing("Blank reason", "reason"),
+          unrated("Empty reason", Some(TierRecommendation(ModelTier.Frontier, ""))) -> missing("Empty reason", "reason"))
+        _ <- ZIO.foreachDiscard(cases) { case (draft, fault) =>
+          val mutations = List(ProposedMutation.Produce(producer, List(draft), milestoneOf(open)))
+          for {
+            planner <- publish(f, DispatchWork.Planner(), plan(f, mutations), usage, artifacts)
+            _ <- rejected(admissions.admit(f.collector, HostAdmissionInput(f.owner.project, planner.artifact.id, f.owner.actor)), _ == fault)
+            review = ChildReport.Review(f.members.map(ref => ReviewMember(ref.id, ReviewVerdict.ChangesRequested, List("Follow-up"))),
+              Some(LedgerProposal(mutations, "Review follow-up")))
+            reviewer <- publish(f, DispatchWork.Reviewer(ReviewerMode.Audit), review, usage, artifacts)
+            _ <- rejected(admissions.admit(f.collector, HostAdmissionInput(f.owner.project, reviewer.artifact.id, f.owner.actor)), _ == fault)
+          } yield ()
+        }
+        // A Replace of an existing Task is not subject to the rule, and a Produce without Task drafts is unaffected.
+        replace <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Replace(f.members.last.id, unrated("Hand-made task", None)),
+          ProposedMutation.Produce(producer, List(research), None))), usage, artifacts)
+        _ <- admit(f, replace, admissions)
+        accepted <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Produce(f.members(1).id,
+          List(unrated("Rated", Some(TierRecommendation(ModelTier.Fast, "Mechanical edit")))), milestoneOf(open)))), usage, artifacts)
+        _ <- admit(f, accepted, admissions)
+        ack <- proposals(f.owner, accepted.artifact.id)
+        _ <- assertIO(ack.items.size == 3)
       } yield ()
     }
 

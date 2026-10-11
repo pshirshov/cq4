@@ -36,6 +36,8 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
   private val Invocations = Set("/cq:advance", "$cq-advance")
   private def invocation(text: String): String = text.takeWhile(_ != ' ').ensuring(Invocations, text)
   private def task(title: String): ItemDraft = ItemDraft(title, "Narrative", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil, None), Nil)
+  private def planned: ItemDraft = task("Planned task").copy(content =
+    Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil, Some(TierRecommendation(ModelTier.Standard, "Ordinary scoped change"))))
   private def goal(title: String): ItemDraft = task(title).copy(content = Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope"))
   private def question(title: String): ItemDraft = task(title).copy(content = Content.Question(QuestionStatus.Open, "Prompt", "Context", Nil, None, None))
   private def defect(title: String): ItemDraft = task(title).copy(content = Content.Defect(DefectStatus.Open, Severity.Medium, "Observed", "Expected", "Reproduction", None, Nil))
@@ -1380,7 +1382,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         val applied = for {
           (planning, planningKey, cycle, artifact, members) <- proposed(service, usage, artifacts, admissions, "milestone-existing-proposal",
             List(task("Producer"), milestone("Open milestone", MilestoneStatus.Open)), true)(members =>
-            List(ProposedMutation.Produce(members.head.id, List(task("Planned task")), Some(MilestoneRef.Existing(members(1).id)))))
+            List(ProposedMutation.Produce(members.head.id, List(planned), Some(MilestoneRef.Existing(members(1).id)))))
           ack <- proposals(planning.governor, artifact)
           stamped <- status(service, planning, planningKey)
           _ <- assertIO(ack.items.map(_.id).toSet == members.map(_.id).toSet + members.head.id.copy(number = 2) && stamped.exists(_.state == DriverState.On) &&
@@ -1436,7 +1438,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         val applied = for {
           (session, sessionKey, cycle, artifact, members) <- proposed(service, usage, artifacts, admissions, "milestone-created-proposal", List(task("Producer"), task("Bystander")), true)(members =>
             List(ProposedMutation.Create(milestone("Planned milestone", MilestoneStatus.Open)),
-              ProposedMutation.Produce(members.head.id, List(task("Planned task")), Some(MilestoneRef.Created(0)))))
+              ProposedMutation.Produce(members.head.id, List(planned), Some(MilestoneRef.Created(0)))))
           ack <- proposals(session.governor, artifact)
           stamped <- status(service, session, sessionKey)
           _ <- assertIO(ack.items.map(_.id).map(_.ledger).sortBy(_.toString) == List(Ledger.Milestones, Ledger.Tasks, Ledger.Tasks) &&
@@ -1466,7 +1468,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         } yield ()
         each("direct Create and Produce" -> direct, "applied proposal" -> applied, "Created index naming a Task" -> misnamed,
           "milestone no Produce names" -> refused("milestone-unnamed", "non-selected creation: M1 is not a selected descendant of G1")(root => revision =>
-            List(Mutation.Create(milestone("Unassigned milestone", MilestoneStatus.Open)), Mutation.Produce(root, revision, List(task("Planned task")), None))),
+            List(Mutation.Create(milestone("Unassigned milestone", MilestoneStatus.Open)), Mutation.Produce(root, revision, List(planned), None))),
           "milestone created alone" -> refused("milestone-alone", "non-selected creation: M1 is not a selected descendant of G1")(_ => _ =>
             List(Mutation.Create(milestone("Unattached milestone", MilestoneStatus.Open)))))
     }
