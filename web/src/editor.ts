@@ -142,6 +142,7 @@ function field(unresolved: Schema, value: Json | undefined, label: string, descr
     const select = element('select', ''); select.setAttribute('aria-label', label);
     for (const item of schema.enum) { const option = element('option', fieldLabel(item)); option.value = item; select.append(option); }
     if (typeof value === 'string') select.value = value;
+    else if (label === 'tier') select.value = 'Standard';
     const caption = element('label', fieldLabel(label)); caption.append(select); container.append(caption); return { element: container, read: () => select.value };
   }
   if (schema.type === 'boolean') {
@@ -149,7 +150,7 @@ function field(unresolved: Schema, value: Json | undefined, label: string, descr
     const caption = element('label', fieldLabel(label)); caption.prepend(checkbox); container.append(caption); return { element: container, read: () => checkbox.checked };
   }
   if (schema.type === 'string' || schema.type === 'integer') {
-    const input = element('textarea', ''); input.rows = label === 'title' || ['value', 'path', 'hash', 'repository', 'address', 'version', 'component', 'revision'].includes(label) ? 1 : 3;
+    const input = element('textarea', ''); input.rows = label === 'title' || ['value', 'reason', 'path', 'hash', 'repository', 'address', 'version', 'component', 'revision'].includes(label) ? 1 : 3;
     input.setAttribute('aria-label', label); input.value = value === undefined || value === null ? '' : String(value);
     const caption = element('label', fieldLabel(label)); caption.append(input); container.append(caption);
     return { element: container, read: () => schema.type === 'integer' ? Number(input.value) : input.value };

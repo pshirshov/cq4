@@ -4,7 +4,7 @@ import { chromium } from 'playwright';
 import { readFile } from 'node:fs/promises';
 import { hold, HOLD_SETTLE_MS } from './hold.mjs';
 const bundle = await build({ stdin: { contents: `export * as api from './generated/typescript/cq/api/index.js';
-export { QuestionBatch } from './web/src/questions.js'; export { itemView } from './web/src/presentation.js';
+export { QuestionBatch } from './web/src/questions.js'; export { itemView } from './web/src/presentation.js'; export { editItem } from './web/src/editor.js';
 export { ReferencePopup } from './web/src/references.js'; export { RequirementsDialog } from './web/src/requirements.js';
 export { ModeDialog, ModeIndicator } from './web/src/mode.js'; export { attemptsTable, unmeasuredNote } from './web/src/usage-view.js';`,
   resolveDir: process.cwd() }, bundle: true, format: 'iife', globalName: 'CQComponents', write: false });
@@ -255,5 +255,49 @@ try {
     assert.equal(details[1].Gaps, 'No meter: the work was done in the governing session, whose usage is that session\'s own');
     assert.match(await page.evaluate(() => CQComponents.unmeasuredNote), /^An attempt without a measurement counts no tokens here, which is not zero usage\./);
     console.log('PASS: attempts of the governing session\'s own work and review are named as such, without a model of their own, and say that they have no meter');
+  }
+  if (process.argv.includes('--task-tier')) {
+    // I27: a Task's recommended tier and reason are shown in its view and changed through its form.
+    const base = recommendation => ({ title: 'Tiered task', body: 'Body text', labels: ['ui'], citations: [], archived: false,
+      content: { Task: { status: 'Ready', acceptance: ['First criterion'], result: null, validation: [], recommendation } } });
+    const shown = async tier => {
+      await page.evaluate(recommendation => {
+        const { api, itemView } = CQComponents;
+        const task = new api.Content_Task(api.TaskStatus.Ready, ['First criterion'], undefined, [],
+          recommendation === null ? undefined : new api.TierRecommendation(api.ModelTier[recommendation.tier], recommendation.reason));
+        document.body.replaceChildren(itemView(new api.ItemDraft('Tiered task', 'Body text', new Set(), false, task, []), text => document.createTextNode(text)));
+      }, tier);
+      assert.equal(await page.locator('section[data-field="recommendation"]').count(), 1, 'Task view has a recommended tier section');
+      return page.locator('section[data-field="recommendation"]').innerText();
+    };
+    const withTier = await shown({ tier: 'Frontier', reason: 'Touches the dispatch core' });
+    assert.match(withTier, /Recommended tier/); assert.match(withTier, /Frontier/); assert.match(withTier, /Touches the dispatch core/);
+    const without = await shown(null);
+    assert.match(without, /No tier recommended/);
+    const open = async recommendation => {
+      await page.evaluate(draft => { window.form = CQComponents.editItem(draft, 'Edit'); document.body.replaceChildren(window.form.element); },
+        base(recommendation));
+      return page.locator('[data-field="Task"]');
+    };
+    const read = () => page.evaluate(() => window.form.read());
+    // Tier change keeps the reason and everything else.
+    const task = await open({ tier: 'Fast', reason: 'Mechanical edit' });
+    assert.deepEqual(await read(), base({ tier: 'Fast', reason: 'Mechanical edit' }));
+    const reason = task.locator('textarea[aria-label=reason]');
+    assert.equal(await reason.getAttribute('rows'), '1');
+    await task.locator('select[aria-label=tier]').selectOption('Frontier');
+    assert.deepEqual(await read(), base({ tier: 'Frontier', reason: 'Mechanical edit' }));
+    await reason.fill('Needs judgement');
+    assert.deepEqual(await read(), base({ tier: 'Frontier', reason: 'Needs judgement' }));
+    // Removal.
+    await task.getByRole('checkbox', { name: 'Add recommendation' }).uncheck();
+    assert.deepEqual(await read(), base(null));
+    // A Task without a recommendation gains a tier with an empty reason.
+    const bare = await open(null);
+    assert.deepEqual(await read(), base(null));
+    await bare.getByRole('checkbox', { name: 'Add recommendation' }).check();
+    await bare.locator('select[aria-label=tier]').selectOption('Standard');
+    assert.deepEqual(await read(), base({ tier: 'Standard', reason: '' }));
+    console.log('PASS: Task view shows its recommended tier and reason or that it has none; form changes the tier keeping the reason, removes the recommendation, and adds a tier with an empty reason');
   }
 } finally { await browser.close(); }
