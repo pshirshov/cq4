@@ -546,10 +546,10 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
             assert(workspace.admission == WorkspaceAdmission.Removed, workspace.toString)
           }
           // I20: the stopped run is a Cancelled Check span and the failed preparation a Failed Integrate span.
-          recorded <- spans.read(f.owner.project)(reader => List(PhaseSpans.check(record, f.worker, "slow", None).id,
+          recorded <- spans.read(f.owner.project)(reader => List(PhaseSpans.check(record, f.worker, "slow", Some(SpanParent.Span(PhaseSpans.integrationId(id)))).id,
             PhaseSpans.integration(id, f.worker, f.owner.actor.session, 0, 0, AttemptState.Failed, None).id).map(reader.span))
           _ <- ZIO.attempt(assert(recorded.map(_.map(value => (value.phase, value.state))) == List(Some((UsagePhase.Check, AttemptState.Cancelled)),
-            Some((UsagePhase.Integrate, AttemptState.Failed))) && recorded.head.contains(PhaseSpans.check(record, f.worker, "slow", None)), recorded.toString))
+            Some((UsagePhase.Integrate, AttemptState.Failed))) && recorded.head.contains(PhaseSpans.check(record, f.worker, "slow", Some(SpanParent.Span(PhaseSpans.integrationId(id))))), recorded.toString))
         } yield ()
       }
     }
