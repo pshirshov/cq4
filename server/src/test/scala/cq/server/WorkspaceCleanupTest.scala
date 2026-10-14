@@ -343,7 +343,7 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
         ended <- state.session(0)
         span <- ZIO.attemptBlocking {
           ended.finish()
-          val span = PhaseSpan(RequestId(uuid), ended.run.assignment.id, ended.run.attempt.session, UsagePhase.Check, 1000, 2000, AttemptState.Cancelled, None, None)
+          val span = PhaseSpan(RequestId(uuid), ended.run.assignment.id, ended.run.attempt.session, UsagePhase.Check, 1000, 2000, AttemptState.Cancelled, None, None, None)
           new SpanDelivery(ended.directory.resolve("spans"), ended.run.project.project, new DeliverySync).retain(span)
           ended.directory.resolve("spans").resolve(span.id.value.toString)
         }
@@ -359,7 +359,7 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
     "end the waits an ended session left Running as Unknown at their last observation, deliver the ones the server did not acknowledge and leave the one that ended" in { (local: LocalWorkspaceFixture) =>
       val state = new State(local)
       def wait(run: SupervisorRun, item: Long, finished: Long, status: AttemptState, observation: Long): PhaseSpan = PhaseSpan(RequestId(uuid), run.assignment.id, run.attempt.session,
-        UsagePhase.Await, 1000, finished, status, None, Some(AwaitedSpan(ItemId(run.project.project, Ledger.Questions, item), Set(ItemId(run.project.project, Ledger.Tasks, 1)), false, observation)))
+        UsagePhase.Await, 1000, finished, status, None, Some(AwaitedSpan(ItemId(run.project.project, Ledger.Questions, item), Set(ItemId(run.project.project, Ledger.Tasks, 1)), false, observation)), None)
       for {
         ended <- state.session(0)
         spans <- ZIO.attemptBlocking {

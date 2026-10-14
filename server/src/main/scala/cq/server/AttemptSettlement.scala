@@ -108,12 +108,15 @@ private[server] final class AttemptSettlement(config: SupervisorConfig, authorit
       validate(entry, candidate, check, index, trace)
     }
 
+  /** The governing session's host runs a worker's candidate check when the child settles, so the governing attempt requested it. */
+  private def governing: Option[SpanParent] = Some(SpanParent.Attempt(config.run.attempt.id))
+
   private def validate(entry: DispatchExecution, candidate: GitCommit, check: ValidationCheck, index: Int, trace: Ref[AttemptTrace]): Task[ValidationEvidence] = for {
     // The check is a Running span from its job's registration; its finish is retained and sent when the job settles and is published with the attempt.
     validated <- validation(entry.ticket.attempt.id, s"check-$index", candidate, check, (name, id, base, command) =>
-      launch(entry, id, base, command, record => spans.start(PhaseSpans.checkStart(record, entry.ticket.assignment.id, name))).ensuring(release(id).ignore)
+      launch(entry, id, base, command, record => spans.start(PhaseSpans.checkStart(record, entry.ticket.assignment.id, name, governing))).ensuring(release(id).ignore)
       .tap { record =>
-        val finish = PhaseSpans.check(record, entry.ticket.assignment.id, name)
+        val finish = PhaseSpans.check(record, entry.ticket.assignment.id, name, governing)
         spans.record(finish).ignore *> trace.update(value => value.copy(spans = value.spans :+ finish))
       })
     evidence = validated.evidence

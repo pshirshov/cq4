@@ -232,8 +232,8 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Span recovery"), assignment, governor, "0.156.1", fixture.source.toString, fixture.base, SessionOwnership.Managed)
         directory <- ZIO.attemptBlocking(Files.createTempDirectory("cq-span-recovery-"))
         journal <- ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), owner.project, owner.actor.session)))(value => ZIO.attemptBlocking(value.close()).orDie)
-        integrated = PhaseSpans.integration(IntegrationId(uuid), worked.id, owner.actor.session, 2000, 9500, AttemptState.Completed)
-        combined = PhaseSpans.combination(RequestId(uuid), worked.id, owner.actor.session, 9500, 9600, AttemptState.Unknown)
+        integrated = PhaseSpans.integration(IntegrationId(uuid), worked.id, owner.actor.session, 2000, 9500, AttemptState.Completed, None)
+        combined = PhaseSpans.combination(RequestId(uuid), worked.id, owner.actor.session, 9500, 9600, AttemptState.Unknown, None)
         _ <- ZIO.attemptBlocking {
           new DeliveryQueue(directory.resolve("delivery"), new DeliverySync).commit(List(HostDelivery.Usage(HostUsageInput(owner.project,
             HostUsage.Finish(AttemptOutcome(RequestId(uuid), governor.id, AttemptState.Completed, 10000, Nil, None))))))

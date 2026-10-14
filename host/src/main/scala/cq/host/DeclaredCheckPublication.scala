@@ -6,7 +6,7 @@ import java.nio.file.{Files, Path}
 final case class DeclaredCheckReceipt(status: DeclaredCheckStatus, acknowledged: Int)
 
 /** One run of a declared check; the ticket's `failures` are the observations of the failed runs before it.
-  * The run's job is a Check span on `assignment`, the reviewer's own; its start is registered when the job starts and its finish
+  * The run's job is a Check span on `assignment`, the reviewer's own, whose parent is the reviewer's attempt (`ticket.parent`); its start is registered when the job starts and its finish
   * retained in `spans` when the run is sealed. */
 final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicket, assignment: AssignmentId, payload: Path, spans: Option[SpanDelivery] = None) {
   private val MaxStatusBytes = 4096
@@ -42,7 +42,7 @@ final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicke
     val summary = ArtifactUpload(project, NativeArtifacts.id(ticket.parent, prefix + "-status"), ticket.parent, ArtifactKind.Transcript,
       "application/json", HostFiles.encode(DeclaredCheckStatus_JsonCodec, status))
     // The finish is retained beside the run's start before it is sealed, so that recovery never closes a span this publication ends.
-    val span = record.map(value => PhaseSpans.check(value, assignment, ticket.check.name))
+    val span = record.map(value => PhaseSpans.check(value, assignment, ticket.check.name, Some(SpanParent.Attempt(ticket.parent))))
     for (value <- span; queue <- spans) queue.retain(value)
     queue.commit((outParts ++ errParts ++ artifact.toList :+ summary).map(HostDelivery.Artifact.apply) ++
       span.map(value => PhaseSpans.delivery(project, value)))

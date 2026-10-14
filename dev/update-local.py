@@ -176,7 +176,7 @@ def structure(database: Database, name: str, label: str) -> list[str]:
 
 class DriveIdentityAndPeriods:
     """The step from the schema without drive periods: it creates the table cq_drive_periods with its index, gives every stored driver a
-    drive identity in its body and its summary, gives every stored span the optional fields check and await as null, records the state each driver is in as the first period of its drive, and records the
+    drive identity in its body and its summary, gives every stored span the optional fields check, await and parent as null, records the state each driver is in as the first period of its drive, and records the
     schema hash that declares the table."""
     def __init__(self, sql: str, schema_after: str, schema_source: Path):
         self.sql = sql
@@ -204,11 +204,11 @@ class DriveIdentityAndPeriods:
         require(set(after) == set(before) | {PERIODS}, f"Data step created or dropped a table other than {PERIODS}")
         require(all(after[table] == value for table, value in before.items() if table not in (DRIVERS, SPANS, MIGRATIONS)),
                 f"Data step changed a table other than {DRIVERS}, {SPANS}, {PERIODS}, {MIGRATIONS}")
-        # A stored span decodes only with the optional fields check and await present: each gains them as null and nothing else changes.
+        # A stored span decodes only with the optional fields check, await and parent present: each gains them as null and nothing else changes.
         spans = self.span_rows(database, "spans-after")
         require(len(spans) == len(self.spans), "Data step created or dropped a span")
         for was, now in zip(self.spans, spans):
-            require(now == {**was, "body": {"check": None, "await": None, **was["body"]}}, "Data step changed a span other than by the fields check and await")
+            require(now == {**was, "body": {"check": None, "await": None, "parent": None, **was["body"]}}, "Data step changed a span other than by the fields check, await and parent")
         drivers = self.rows(database, "drivers-after")
         require(len(drivers) == len(self.drivers), "Data step created or dropped a driver")
         identities = set()

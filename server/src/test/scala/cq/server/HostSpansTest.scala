@@ -62,6 +62,8 @@ final class HostSpansLocal extends SpecZIO with AssertZIO {
     val held = new AtomicInteger(0)
     @volatile var artifact: ArtifactUpload => Unit = _ => ()
     val failed = new AtomicInteger(0)
+    /** Every span the server acknowledged, in delivery order. */
+    val delivered = new ConcurrentLinkedQueue[PhaseSpan]()
   }
   private final class Receiver(application: Application, auth: Authorization, root: Authority, authority: Authority, runtime: Runtime[Any], hooks: Hooks) extends ServerApi {
     private def execute[A](value: Task[A]): A = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(value).getOrThrow() }
@@ -77,7 +79,11 @@ final class HostSpansLocal extends SpecZIO with AssertZIO {
         case HostUsage.Span(_) if hooks.spansDown => hooks.failed.incrementAndGet(); throw new IOException("The server cannot be reached")
         case _ => ()
       }
-      try execute(application.ingest(authority, value)) catch { case error: Throwable => println(s"Host span delivery refused: $value: $error"); throw error }
+      try {
+        val result = execute(application.ingest(authority, value))
+        value.operation match { case HostUsage.Span(span) => hooks.delivered.add(span); case _ => () }
+        result
+      } catch { case error: Throwable => println(s"Host span delivery refused: $value: $error"); throw error }
     }
     override def admit(value: HostAdmissionInput): ResultAdmission = execute(application.admit(authority, value))
     override def integrate(value: HostIntegrationInput): IntegrationRecord = execute(application.integrate(authority, value))
@@ -100,6 +106,12 @@ final class HostSpansLocal extends SpecZIO with AssertZIO {
     /** spans, running host spans, running attempts and wall time of a phase row for the session. */
     def row(phase: UsagePhase): Task[(Long, Long, Long, Long)] = usage.phases(owner, session).map(_.phases.find(_.phase == phase)
       .map(value => (value.spans, value.runningSpans, value.running, value.wallMillis)).getOrElse((0L, 0L, 0L, 0L)))
+    /** The spans the host delivered, one per identity as the server holds them: each delivered record is replayed, which returns the
+      * stored span, whose parent is read. */
+    def stored: Task[List[PhaseSpan]] = {
+      val host = owner.copy(actor = owner.actor.copy(subject = "CQ host collector", role = Role.Collector))
+      ZIO.foreach(hooks.delivered.toArray.toList.collect { case span: PhaseSpan => span }.groupBy(_.id).values.map(_.head).toList)(span => usage.span(host, span))
+    }
     def checks: Task[List[(Option[String], AttemptState, Long, Long)]] = usage.checks(owner, session).map(_.checks.map(value => (value.check, value.state, value.runs, value.wallMillis)))
     def eventually(what: String)(holds: Task[Boolean]): Task[Unit] = (ZIO.sleep(zio.Duration.fromMillis(25)) *> holds).repeatUntil(identity)
       .timeoutFail(new IllegalStateException("Not reached: " + what))(zio.Duration.fromSeconds(60)).unit
@@ -241,6 +253,14 @@ final class HostSpansLocal extends SpecZIO with AssertZIO {
           // A prepared integration that is not applied is still open: it ends with its apply or its discard.
           assert(integrateReady == ((1L, 1L, 0L, 0L)), integrateReady.toString)
         }
+        held <- w.stored
+        _ <- ZIO.attempt {
+          val parent = SpanParent.Attempt(w.governing._2.id)
+          val integrate = held.filter(_.phase == UsagePhase.Integrate)
+          val check = held.filter(_.phase == UsagePhase.Check)
+          assert(integrate.map(_.parent) == List(Some(parent)) && integrate.head.id == PhaseSpans.integrationId(id), held.toString)
+          assert(check.map(_.parent) == List(Some(SpanParent.Span(integrate.head.id))), held.toString)
+        }
         discarded <- w.controller.discard(id)
         integrateAfter <- w.row(UsagePhase.Integrate)
         again <- w.controller.discard(id)
@@ -275,7 +295,10 @@ final class HostSpansLocal extends SpecZIO with AssertZIO {
           .timeoutFail(new IllegalStateException("Combination did not settle"))(zio.Duration.fromSeconds(90))
         _ <- w.eventually("the combination is finished on the server")(w.row(UsagePhase.Combine).map(_._2 == 0))
         after <- w.row(UsagePhase.Combine)
+        held <- w.stored
         _ <- ZIO.attempt {
+          assert(held.filter(_.phase == UsagePhase.Combine).map(_.parent) == List(Some(SpanParent.Attempt(w.governing._2.id))), held.toString)
+          assert(held.filter(_.phase == UsagePhase.Integrate).map(_.parent) == List(Some(SpanParent.Attempt(w.governing._2.id))), held.toString)
           assert(prepared.phase == IntegrationPhase.Ready && resolved.phase == IntegrationPhase.NotApplied, s"$prepared $resolved")
           assert(during == ((1L, 1L, 0L, 0L)), during.toString)
           assert(status.phase == CombinationPhase.Ready, status.toString)
@@ -356,7 +379,7 @@ final class HostSpansLocal extends SpecZIO with AssertZIO {
         for {
           _ <- ZIO.succeed { w.hooks.holdStarts = gate; w.driver.holding = true }
           id = AttemptId(uuid)
-          fiber <- spans.check(w.jobs, execution, w.worker.id)("unit", id, w.local.base, w.command()).fork
+          fiber <- spans.check(w.jobs, execution, w.worker.id, None)("unit", id, w.local.base, w.command()).fork
           _ <- w.eventually("the start request is held")(ZIO.succeed(w.hooks.held.get >= 1))
           _ <- ZIO.succeed(w.driver.release())
           // The result comes back and the finish reaches the server although the start request has not returned.
@@ -386,15 +409,19 @@ final class HostSpansLocal extends SpecZIO with AssertZIO {
         for {
           _ <- ZIO.succeed { w.driver.holding = true }
           id = AttemptId(uuid)
-          fiber <- spans.check(w.jobs, execution, w.worker.id)("unit", id, w.local.base, w.command()).fork
+          fiber <- spans.check(w.jobs, execution, w.worker.id, Some(SpanParent.Attempt(w.governing._2.id)))("unit", id, w.local.base, w.command()).fork
           _ <- w.eventually("the check is Running on the server")(w.row(UsagePhase.Check).map(_._2 == 1))
           during <- w.checks
           started <- w.jobs.status(w.config.owner, id)
+          startedParent <- w.stored
           _ <- ZIO.succeed(w.driver.release())
           record <- fiber.join
           after <- w.checks
           row <- w.row(UsagePhase.Check)
+          finishedParent <- w.stored
           _ <- ZIO.attempt {
+            // The Running registration and the finish carry the same parent, as the revalidation round names it.
+            assert(startedParent.map(_.parent) == List(Some(SpanParent.Attempt(w.governing._2.id))) && finishedParent.map(_.parent) == startedParent.map(_.parent), startedParent.toString)
             assert(during == List((Some("unit"), AttemptState.Running, 1L, 0L)), during.toString)
             assert(started.createdAt == record.createdAt && record.phase == JobPhase.Settled)
             assert(after == List((Some("unit"), JobOutcome.observed(record).state, 1L, finishedWall(record))), after.toString)
@@ -413,7 +440,7 @@ final class HostSpansLocal extends SpecZIO with AssertZIO {
         for {
           _ <- ZIO.succeed { w.hooks.spansDown = true; w.driver.holding = true }
           id = AttemptId(uuid)
-          fiber <- spans.check(w.jobs, execution, w.worker.id)("unit", id, w.local.base, w.command()).fork
+          fiber <- spans.check(w.jobs, execution, w.worker.id, None)("unit", id, w.local.base, w.command()).fork
           _ <- w.eventually("the start was refused")(ZIO.succeed(w.hooks.failed.get >= 1))
           nothing <- w.row(UsagePhase.Check)
           // The server comes back before the job ends: the finish delivers the retained start and itself.
@@ -441,7 +468,7 @@ final class HostSpansLocal extends SpecZIO with AssertZIO {
         for {
           _ <- ZIO.succeed { w.hooks.spansDown = true; w.driver.holding = true }
           id = AttemptId(uuid)
-          fiber <- spans.check(w.jobs, execution, w.worker.id)("unit", id, w.local.base, w.command()).fork
+          fiber <- spans.check(w.jobs, execution, w.worker.id, None)("unit", id, w.local.base, w.command()).fork
           // The first start request failed and returned; the server then answers a start only after the test lets it.
           _ <- w.eventually("the start was refused")(ZIO.succeed(w.hooks.failed.get >= 1))
           _ <- ZIO.succeed { w.hooks.spansDown = false; w.hooks.holdStarts = gate; w.driver.release() }
@@ -477,13 +504,52 @@ final class HostSpansLocal extends SpecZIO with AssertZIO {
           evidence <- fiber.join
           traced <- trace.get
           after <- w.checks
+          held <- w.stored
           records <- w.jobs.records(w.config.owner)
           _ <- ZIO.attempt {
             val record = records.head
+            val governing = Some(SpanParent.Attempt(w.governing._2.id))
+            assert(held.map(_.parent) == List(governing) && traced.spans.map(_.parent) == List(governing), held.toString)
             assert(during == List((Some("unit"), AttemptState.Running, 1L, 0L)), during.toString)
             assert(evidence.map(_.state) == List(ValidationState.Passed), evidence.toString)
-            assert(traced.spans == List(PhaseSpans.check(record, w.worker.id, "unit")), traced.spans.toString)
+            assert(traced.spans == List(PhaseSpans.check(record, w.worker.id, "unit", governing)), traced.spans.toString)
             assert(after == List((Some("unit"), AttemptState.Completed, 1L, finishedWall(record))), after.toString)
+          }
+        } yield ()
+      }
+    }
+
+    "register a reviewer-declared check with the reviewer's attempt as parent, at its start and at its finish, through the reviewer's own request path" in {
+      (local: LocalWorkspaceFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO],
+        admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      world(local, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(ValidationCheck("verify", List("true"), 10000, 65536, 1, 0)), advanced = false) { w =>
+        val collector = w.owner.copy(actor = w.owner.actor.copy(subject = "CQ host collector", role = Role.Collector))
+        for {
+          reviewer <- usage.start(collector, w.workerAttempt.copy(id = AttemptId(uuid), assignment = w.worker.id, parent = Some(w.governing._2.id), role = Role.Reviewer, phase = UsagePhase.Review))
+          ticket = DispatchTicket(w.request.copy(work = DispatchWork.Reviewer(ReviewerMode.Candidate)), w.worker, reviewer, Some(w.profile), None)
+          entry <- ZIO.attemptBlocking {
+            val value = new DispatchExecution(ticket, w.config.directory.resolve("children").resolve(reviewer.id.value.toString), null, null)
+            HostFiles.directory(value.directory)
+            value.active(reviewer.id)
+            value
+          }
+          checks = new ReviewerChecks(entry, w.reviewed, w.config, w.collector, w.jobs)
+          _ <- ZIO.attemptBlocking(entry.installChecks(checks))
+          _ <- ZIO.succeed { w.driver.holding = true }
+          _ <- checks.request("verify", 100)
+          _ <- w.eventually("the declared check is Running on the server")(w.row(UsagePhase.Check).map(_._2 == 1))
+          started <- w.stored
+          _ <- ZIO.succeed(w.driver.release())
+          status <- checks.request("verify", 1000).repeatUntil(value => Set(DeclaredCheckPhase.Completed, DeclaredCheckPhase.Failed, DeclaredCheckPhase.Unknown)(value.phase))
+            .timeoutFail(new IllegalStateException("Declared check did not terminate"))(zio.Duration.fromSeconds(60))
+          _ <- checks.close
+          _ <- w.eventually("the declared check is finished on the server")(w.row(UsagePhase.Check).map(_._2 == 0))
+          finished <- w.stored
+          _ <- ZIO.attempt {
+            val reviewing = Some(SpanParent.Attempt(reviewer.id))
+            assert(started.map(_.parent) == List(reviewing) && started.map(_.assignment) == List(w.worker.id), started.toString)
+            assert(finished.map(_.parent) == List(reviewing) && finished.map(_.state) != List(AttemptState.Running), finished.toString)
+            assert(status.phase == DeclaredCheckPhase.Completed, status.toString)
           }
         } yield ()
       }
@@ -495,11 +561,12 @@ final class HostSpansLocal extends SpecZIO with AssertZIO {
       world(local, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, Nil, advanced = false) { w =>
         val project = w.config.project.project
         val session = w.owner.actor.session
-        def started(at: Long, name: String): PhaseSpan = PhaseSpan(RequestId(uuid), w.worker.id, session, UsagePhase.Check, at, at, AttemptState.Running, Some(name), None)
-        val unfinished = started(5000, "unfinished")
+        def started(at: Long, name: String): PhaseSpan = PhaseSpan(RequestId(uuid), w.worker.id, session, UsagePhase.Check, at, at, AttemptState.Running, Some(name), None, None)
+        val parent = Some(SpanParent.Attempt(w.governing._2.id))
+        val unfinished = started(5000, "unfinished").copy(parent = parent)
         val finished = started(6000, "finished")
         val undelivered = started(7000, "undelivered")
-        val integration = PhaseSpan(RequestId(uuid), w.worker.id, session, UsagePhase.Integrate, 8000, 8000, AttemptState.Running, None, None)
+        val integration = PhaseSpan(RequestId(uuid), w.worker.id, session, UsagePhase.Integrate, 8000, 8000, AttemptState.Running, None, None, parent)
         val recovery = new FixedClock(100000)
         def stored(span: PhaseSpan): Task[PhaseSpan] = usage.span(Scope(project, Actor("CQ host collector", session, Role.Collector)), span.copy(finishedAt = span.startedAt, state = AttemptState.Running))
         ZIO.scoped { for {
@@ -531,6 +598,8 @@ final class HostSpansLocal extends SpecZIO with AssertZIO {
             assert(cursorAfter > cursor && first.acknowledged > 0, s"$first")
             assert(after.map(_.state) == List(AttemptState.Unknown, AttemptState.Failed, AttemptState.Unknown, AttemptState.Unknown), after.toString)
             assert(after.map(_.finishedAt) == List(100000L, 6400L, 100000L, 100000L), after.toString)
+            // Recovery closes a span with the parent of its Running registration.
+            assert(after.map(_.parent) == List(parent, None, None, parent), after.toString)
             assert(!settled.undelivered, "Nothing is left to deliver once recovery closed the spans")
             assert(again == after && cursorTwice == cursorAfter && second.acknowledged >= 0)
           }

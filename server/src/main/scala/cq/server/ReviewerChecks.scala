@@ -79,7 +79,7 @@ private[server] final class ReviewerChecks(entry: DispatchExecution, candidate: 
       _ <- ZIO.attempt { entry.check(); require(!stopping, "Reviewer ended before its check started") }
       started <- jobs.start(config.owner, ticket.workspace, value.command)
       // Running on the reviewer's assignment from the job's registration; the run's finish is sealed with its publication.
-      _ <- spans.start(PhaseSpans.checkStart(started, entry.ticket.assignment.id, ticket.check.name))
+      _ <- spans.start(PhaseSpans.checkStart(started, entry.ticket.assignment.id, ticket.check.name, Some(SpanParent.Attempt(entry.ticket.attempt.id))))
       _ <- if (stopping) cancel(value) else ZIO.unit
       _ <- ZIO.succeed(update(value)(_.copy(phase = DeclaredCheckPhase.Running)))
       record <- jobs.await(config.owner, ticket.workspace.attempt)

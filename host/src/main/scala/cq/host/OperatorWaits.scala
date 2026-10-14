@@ -21,7 +21,7 @@ final class OperatorWaits(directory: Path, run: SupervisorRun, collector: Server
   private val store = new WaitStore(directory.resolve(OperatorWaits.Directory), run.project.project)
 
   private def span(item: ItemId, wait: Active, finishedAt: Long, state: AttemptState): PhaseSpan = PhaseSpan(wait.id, run.attempt.assignment, run.attempt.session,
-    UsagePhase.Await, wait.startedAt, finishedAt, state, None, Some(AwaitedSpan(item, wait.blocked, wait.truncated, wait.observation)))
+    UsagePhase.Await, wait.startedAt, finishedAt, state, None, Some(AwaitedSpan(item, wait.blocked, wait.truncated, wait.observation)), Some(SpanParent.Attempt(run.attempt.id)))
 
   private def observe(item: ItemId, wait: Active, finishedAt: Long, state: AttemptState): Unit = {
     active = if (state == AttemptState.Running) active.updated(item, wait.copy(observedAt = finishedAt)) else active - item

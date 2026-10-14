@@ -23,13 +23,14 @@ private[server] final class SessionSpans(config: SupervisorConfig, collector: Se
 
   def flush(): Int = delivery.flush(collector)
 
-  /** Runs a check job on `execution` and records it as a Check span on `assignment`: Running from the job's registration, finished when
-    * it settles. An interrupted run is cancelled, recorded as it settles and its workspace released. */
-  def check(jobs: JobSupervisor, execution: GovernedIntegrationJobs, assignment: AssignmentId)(name: String, id: AttemptId, base: GitCommit, command: JobCommand): Task[JobRecord] = {
-    val finish = (record: JobRecord) => this.record(PhaseSpans.check(record, assignment, name))
+  /** Runs a check job on `execution` and records it as a Check span on `assignment` whose parent is `parent` (the unit that requested
+    * the run): Running from the job's registration, finished when it settles. An interrupted run is cancelled, recorded as it settles
+    * and its workspace released. */
+  def check(jobs: JobSupervisor, execution: GovernedIntegrationJobs, assignment: AssignmentId, parent: Option[SpanParent])(name: String, id: AttemptId, base: GitCommit, command: JobCommand): Task[JobRecord] = {
+    val finish = (record: JobRecord) => this.record(PhaseSpans.check(record, assignment, name, parent))
     val interrupted = jobs.cancel(config.owner, id) *> jobs.await(config.owner, id).flatMap(finish) *> jobs.release(config.owner, id)
     (execution.execute(WorkspaceSpec(config.owner.project, config.owner.actor.session, id, config.run.repository, base), command,
-      record => start(PhaseSpans.checkStart(record, assignment, name)))
+      record => start(PhaseSpans.checkStart(record, assignment, name, parent)))
       .onInterrupt(interrupted.ignore) *> execution.status(id)).tap(finish)
   }
 }

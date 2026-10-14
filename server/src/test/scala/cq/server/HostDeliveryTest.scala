@@ -177,7 +177,8 @@ final class HostDeliveryLocal extends AnyWordSpec {
       missing.reconcile(None)
       missing.finish(receiver)
       assert(receiver.spans == List(first -> AttemptState.Failed, second -> AttemptState.Unknown).map { case (record, state) =>
-        PhaseSpan(PhaseSpans.check(record, reviewing, "verify").id, reviewing, session, UsagePhase.Check, 5000, 5700, state, Some("verify"), None)
+        PhaseSpan(PhaseSpans.check(record, reviewing, "verify", None).id, reviewing, session, UsagePhase.Check, 5000, 5700, state, Some("verify"), None,
+          Some(SpanParent.Attempt(parent)))
       }, receiver.spans.toString)
       assert(receiver.spans.map(_.id).distinct.size == 2 && failed.finish(receiver).acknowledged == 0 && receiver.spans.size == 2)
     }
@@ -190,10 +191,10 @@ final class HostDeliveryLocal extends AnyWordSpec {
       val receiver = new Receiver
       assert(delivery.flush(receiver) == 0)
       val id = IntegrationId(UUID.randomUUID())
-      val span = PhaseSpans.integration(id, reviewing, session, 1000, 4000, AttemptState.Completed)
-      val other = PhaseSpans.combination(RequestId(id.value), reviewing, session, 4000, 4100, AttemptState.Unknown)
+      val span = PhaseSpans.integration(id, reviewing, session, 1000, 4000, AttemptState.Completed, None)
+      val other = PhaseSpans.combination(RequestId(id.value), reviewing, session, 4000, 4100, AttemptState.Unknown, None)
       assert(span.id != other.id && span.id.value != id.value && span.phase == UsagePhase.Integrate && other.phase == UsagePhase.Combine)
-      assert(PhaseSpans.integration(id, reviewing, session, 1000, 4000, AttemptState.Completed) == span)
+      assert(PhaseSpans.integration(id, reviewing, session, 1000, 4000, AttemptState.Completed, None) == span)
       delivery.retain(span)
       delivery.retain(span)
       intercept[IllegalArgumentException](delivery.retain(span.copy(finishedAt = 4001)))

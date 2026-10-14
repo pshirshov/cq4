@@ -154,7 +154,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         created <- service.change(owner, request(List(Mutation.Create(task))))
         assignment = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set(created.items.head.id), Attribution.Direct, None, None)
         _ <- usage.assign(host, assignment)
-        span = PhaseSpan(RequestId(UUID.randomUUID()), assignment.id, owner.actor.session, UsagePhase.Check, 1000, 1700, AttemptState.Failed, Some("verify"), None)
+        span = PhaseSpan(RequestId(UUID.randomUUID()), assignment.id, owner.actor.session, UsagePhase.Check, 1000, 1700, AttemptState.Failed, Some("verify"), None, None)
         _ <- usage.span(host, span)
         before <- usage.phases(owner, filter)
         _ <- assertIO(before.phases.map(value => (value.phase, value.spans, value.wallMillis)) == List((UsagePhase.Check, 1L, 700L)))
@@ -170,6 +170,51 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         _ <- assertIO(restored.map(_.entries) == Right(manifest.entries))
         copy <- new PostgresUsageRepository(target).read(owner.project)(reader => (reader.span(span.id), reader.spans(filter), reader.cursor, reader.checks(filter, 200)))
         _ <- assertIO(copy == (Some(span), List(SpanTally(UsagePhase.Check, 1, 700, 0)), before.cursor, List(CheckTally(Some("verify"), AttemptState.Failed, 1, 700))))
+      } yield ()
+    }
+
+    "round-trip the parent of a span, an attempt for one and a span for another" in {
+      (service: LedgerService[IO], usage: UsageService[IO], config: DatabaseConfig, archives: ProjectArchives) =>
+      val owner = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Governor))
+      val host = owner.copy(actor = owner.actor.copy(role = Role.Collector))
+      val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
+      val separator = if (config.url.contains("?")) "&" else "?"
+      val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
+      for {
+        _ <- service.initialize(owner, "archived span parents")
+        overhead = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
+        _ <- usage.assign(host, overhead)
+        governing = Attempt(AttemptId(UUID.randomUUID()), overhead.id, None, owner.actor.session, Role.Governor, Harness.Claude,
+          "provider", "model", cq.core.AttemptObservation.AttachedGovernorCollector, 500, UsagePhase.Govern, None)
+        _ <- usage.start(host, governing)
+        integration = PhaseSpan(RequestId(UUID.randomUUID()), overhead.id, owner.actor.session, UsagePhase.Integrate, 1000, 1900, AttemptState.Completed, None, None,
+          Some(SpanParent.Attempt(governing.id)))
+        check = PhaseSpan(RequestId(UUID.randomUUID()), overhead.id, owner.actor.session, UsagePhase.Check, 1100, 1700, AttemptState.Failed, Some("verify"), None,
+          Some(SpanParent.Span(integration.id)))
+        _ <- usage.span(host, check)
+        _ <- usage.span(host, integration)
+        file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+        manifest <- archives.backup(owner.project, file)
+        _ <- ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
+        })
+        _ <- target.initialize
+        restored <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file).either
+        _ <- ZIO.attempt(Files.deleteIfExists(file))
+        _ <- assertIO(restored.map(_.entries) == Right(manifest.entries))
+        copy <- new PostgresUsageRepository(target).read(owner.project)(reader => (reader.span(integration.id), reader.span(check.id)))
+        _ <- assertIO(copy == ((Some(integration), Some(check))))
+        // A span stored before the parent existed has the field neither as a value nor as null: the update step of the installed database adds it as null.
+        _ <- ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"UPDATE $schema.cq_usage_spans SET body = body - 'parent' WHERE span_id = '${check.id.value}'")); ()
+        })
+        legacy <- new PostgresUsageRepository(target).read(owner.project)(_.span(check.id)).either
+        _ <- ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"UPDATE $schema.cq_usage_spans SET body = '{\"parent\": null}'::jsonb || body WHERE span_id = '${check.id.value}'")); ()
+        })
+        stepped <- new PostgresUsageRepository(target).read(owner.project)(_.span(check.id))
+        _ <- assertIO(stepped == Some(check.copy(parent = None)))
+        _ <- assertIO(legacy.isLeft)
       } yield ()
     }
 
@@ -190,9 +235,9 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         _ <- usage.assign(host, governing)
         awaited = ItemId(owner.project, Ledger.Questions, 7)
         running = PhaseSpan(RequestId(UUID.randomUUID()), governing.id, owner.actor.session, UsagePhase.Await, 1000, 1300, AttemptState.Running, None,
-          Some(AwaitedSpan(awaited, Set(blocked), false, 1)))
+          Some(AwaitedSpan(awaited, Set(blocked), false, 1)), None)
         ended = PhaseSpan(RequestId(UUID.randomUUID()), governing.id, owner.actor.session, UsagePhase.Await, 2000, 2500, AttemptState.Cancelled, None,
-          Some(AwaitedSpan(awaited, Set(other), true, 1)))
+          Some(AwaitedSpan(awaited, Set(other), true, 1)), None)
         _ <- usage.span(host, running)
         refreshed = running.copy(finishedAt = 1600, await = running.await.map(value => value.copy(blocked = Set(blocked, other), observation = 2)))
         _ <- usage.span(host, refreshed)
@@ -252,7 +297,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         _ <- ZIO.attempt(Files.deleteIfExists(file))
       } yield result
       def span(phase: UsagePhase): PhaseSpan = PhaseSpan(RequestId(UUID.randomUUID()), overhead.id, owner.actor.session, phase, 1000, 1000, AttemptState.Running,
-        if (phase == UsagePhase.Check) Some("verify") else None, None)
+        if (phase == UsagePhase.Check) Some("verify") else None, None, None)
       val check = span(UsagePhase.Check)
       val integration = span(UsagePhase.Integrate)
       for {

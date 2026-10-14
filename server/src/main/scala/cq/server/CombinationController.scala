@@ -37,7 +37,7 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
   private def span(entry: CombinationExecution, state: AttemptState): Task[Unit] = ZIO.succeed(synchronized {
     val open = entry.assignment.filter(_ => !entry.spanned)
     entry.spanned = entry.spanned || open.nonEmpty
-    open.map(PhaseSpans.combination(entry.ticket.id, _, config.owner.actor.session, entry.startedAt, entry.observedAt, state))
+    open.map(PhaseSpans.combination(entry.ticket.id, _, config.owner.actor.session, entry.startedAt, entry.observedAt, state, Some(SpanParent.Attempt(config.run.attempt.id))))
   }).flatMap(ZIO.foreachDiscard(_)(spans.record))
   /** A published preparation ends its span as Completed and one that failed before its plan was frozen as Failed, at once, so no
     * Running span outlives an operation the controller counts as quiescent; one whose publication is pending stays open for its
@@ -83,7 +83,7 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
         worker <- ZIO.attemptBlocking(preparation.worker(ticket))
         assignment <- ZIO.attemptBlocking(PhaseSpans.producer(config.directory, worker))
         _ <- ZIO.succeed(synchronized { entry.assignment = Some(assignment) })
-        _ <- spans.start(PhaseSpans.combination(ticket.id, assignment, config.owner.actor.session, entry.startedAt, entry.startedAt, AttemptState.Running))
+        _ <- spans.start(PhaseSpans.combination(ticket.id, assignment, config.owner.actor.session, entry.startedAt, entry.startedAt, AttemptState.Running, Some(SpanParent.Attempt(config.run.attempt.id))))
         plan <- ZIO.attemptBlocking(publication.freeze(ticket)(preparation.prepare(ticket, candidates.observeTarget)))
         _ <- ZIO.succeed(synchronized { entry.frozen = true })
         preview <- ZIO.attemptBlocking(publication.publish(ticket.id, authority.collector))

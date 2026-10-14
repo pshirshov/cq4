@@ -196,6 +196,10 @@ object UsageService {
       invalid(value.check.forall(name => name.trim.nonEmpty && name.length <= 300 && !name.contains('\u0000')), "A check name is nonblank and at most 300 characters")
       invalid(value.startedAt >= 0 && value.finishedAt >= value.startedAt, "Invalid span outcome or times")
       invalid((value.phase == UsagePhase.Await) == value.await.isDefined, "Only a span of a wait on the operator carries the awaited item, and it must")
+      value.parent.foreach {
+        case SpanParent.Attempt(id) => found(tx.attempt(id), "A span's parent attempt is not registered")
+        case SpanParent.Span(id) => invalid(id != value.id, "A span cannot name itself as its parent")
+      }
       value.await match {
         case None =>
           // A running host span has not finished: its finish time is its start time, so it adds no wall time.

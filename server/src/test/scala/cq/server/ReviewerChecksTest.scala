@@ -239,6 +239,8 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
         _ <- f.checks.close
         _ <- ZIO.attemptBlocking {
           val assignment = f.entry.ticket.assignment.id
+          // The reviewer requested each run, whether or not the reviewer waited for it.
+          val reviewer = Some(SpanParent.Attempt(f.entry.ticket.attempt.id))
           val records = List(1, 2).map(run => DeclaredCheckPublication.job(f.entry.ticket.attempt.id, "verify", run)).map(job => f.journal.records.find(_.workspace.attempt == job).get)
           println(s"Reviewer check spans: ${f.receiver.spans}")
           assert(complete.evidence.exists(value => value.state == ValidationState.Passed && value.failures.size == 1), complete.toString)
@@ -246,9 +248,9 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
           val finished = f.receiver.spans.filter(_.state != AttemptState.Running)
           val started = f.receiver.spans.filter(_.state == AttemptState.Running)
           assert(finished.distinct == records.zip(List(AttemptState.Failed, AttemptState.Completed)).map { case (record, state) =>
-            PhaseSpan(PhaseSpans.check(record, assignment, "verify").id, assignment, f.config.owner.actor.session, UsagePhase.Check, record.createdAt, record.updatedAt, state, Some("verify"), None)
+            PhaseSpan(PhaseSpans.check(record, assignment, "verify", None).id, assignment, f.config.owner.actor.session, UsagePhase.Check, record.createdAt, record.updatedAt, state, Some("verify"), None, reviewer)
           }, f.receiver.spans.toString)
-          assert(started.distinct == records.map(record => PhaseSpans.checkStart(record, assignment, "verify")), f.receiver.spans.toString)
+          assert(started.distinct == records.map(record => PhaseSpans.checkStart(record, assignment, "verify", reviewer)), f.receiver.spans.toString)
           assert(f.receiver.spans.map(_.id).distinct.size == 2 && finished.forall(span => span.finishedAt - span.startedAt >= 200))
         }
       } yield () }

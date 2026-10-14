@@ -81,7 +81,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
   private def span(entry: IntegrationExecutionState, state: AttemptState): Task[Unit] = ZIO.succeed(synchronized {
     val open = entry.assignment.filter(_ => !entry.spanned)
     entry.spanned = entry.spanned || open.nonEmpty
-    open.map(PhaseSpans.integration(entry.ticket.id, _, config.owner.actor.session, entry.startedAt, entry.observedAt, state))
+    open.map(PhaseSpans.integration(entry.ticket.id, _, config.owner.actor.session, entry.startedAt, entry.observedAt, state, Some(SpanParent.Attempt(config.run.attempt.id))))
   }).flatMap(ZIO.foreachDiscard(_)(spans.record))
   /** A resolved integration or a failed preparation ends its span; one that is Ready or Pending stays open for its Integrate or its discard. */
   private def resolved(entry: IntegrationExecutionState): Task[Unit] =
@@ -135,10 +135,10 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       assignment <- ZIO.attemptBlocking(PhaseSpans.producer(config.directory, reviewed.workerId))
       _ <- ZIO.succeed(synchronized { entry.assignment = Some(assignment); entry.authorship = Some(reviewed.authorship) })
       // Its members are known: the integration is recorded from here on, Running until it ends.
-      _ <- spans.start(PhaseSpans.integration(ticket.id, assignment, config.owner.actor.session, entry.startedAt, entry.startedAt, AttemptState.Running))
+      _ <- spans.start(PhaseSpans.integration(ticket.id, assignment, config.owner.actor.session, entry.startedAt, entry.startedAt, AttemptState.Running, Some(SpanParent.Attempt(config.run.attempt.id))))
       // The claim is renewed while host checks of a rebased commit run; a renewal that fails for good stops them.
       renewed = renewal.maintain(began, ZIO.attemptBlocking(preparation.renew(reviewed)))
-      rebased <- ZIO.interruptible(rebase(ticket.id, config.settings.integrationTarget.get, reviewed.candidate, spans.check(jobs, execution, assignment)).raceFirst(renewed))
+      rebased <- ZIO.interruptible(rebase(ticket.id, config.settings.integrationTarget.get, reviewed.candidate, spans.check(jobs, execution, assignment, Some(SpanParent.Span(PhaseSpans.integrationId(ticket.id))))).raceFirst(renewed))
       // Shutdown cancels a running check, which then reads as failed; that outcome is discarded rather than reported.
       _ <- ZIO.attempt(synchronized(require(!closing || !rebased.outcome.isInstanceOf[RebaseOutcome.ChecksFailed],
         "Integration admission closed while host checks ran")))

@@ -110,7 +110,7 @@ final class OperatorWaitsLocal extends AnyWordSpec {
     def retained: List[Path] = Using.resource(Files.list(directory.resolve(OperatorWaits.Directory)))(_.iterator().asScala.toList)
     def expected(item: ItemId, started: Long, finished: Long, state: AttemptState, blocked: Set[ItemId], observation: Long, truncated: Boolean = false): PhaseSpan =
       PhaseSpan(RequestId(OperatorWaits.identity(attempt.session, item, started)), assignment.id, attempt.session, UsagePhase.Await, started, finished, state, None,
-        Some(AwaitedSpan(item, blocked, truncated, observation)))
+        Some(AwaitedSpan(item, blocked, truncated, observation)), Some(SpanParent.Attempt(attempt.id)))
   }
 
   "Operator waits (Behavioral Active Blackbox; manual time, filesystem Communication)" should {
@@ -154,6 +154,8 @@ final class OperatorWaitsLocal extends AnyWordSpec {
       assert(span(open) == expected(open, Start + 2 * Minute, Start + 11 * Minute, AttemptState.Cancelled, Set(task(2)), 3))
       // Overlapping waits are three spans, none merged, all on the governing assignment of the one session.
       assert(server.spans.size == 3 && server.spans.values.forall(value => value.assignment == assignment.id && value.session == attempt.session))
+      // Each wait names the governing attempt as the unit that requested it, from its registration to its end.
+      assert(server.spans.values.forall(_.parent.contains(SpanParent.Attempt(attempt.id))))
     }
 
     "end a wait still open as Cancelled at the end of the session although the delivery before it failed" in {

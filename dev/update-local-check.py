@@ -253,8 +253,8 @@ class Compatibility(unittest.TestCase):
         self.assertIn(index, schema)
         self.assertIn(index.replace("CREATE INDEX", "CREATE INDEX IF NOT EXISTS"), sql)
         self.assertIn(f"SET checksum = '{step['schemaAfter']}' WHERE version = 1 AND checksum = '{step['schemaBefore']}'", sql)
-        # A stored span decodes only with check and await present, so the step adds both as null and keeps every other field.
-        self.assertIn("UPDATE cq_usage_spans SET body = '{\"check\": null, \"await\": null}'::jsonb || body", sql)
+        # A stored span decodes only with check, await and parent present, so the step adds each as null and keeps every other field.
+        self.assertIn("UPDATE cq_usage_spans SET body = '{\"check\": null, \"await\": null, \"parent\": null}'::jsonb || body", sql)
         tampered = {**step, "sqlSha256": "0" * 64}
         with self.assertRaisesRegex(RuntimeError, "SQL differs from its pinned step"):
             update.data_step(before, after, tampered, ROOT)

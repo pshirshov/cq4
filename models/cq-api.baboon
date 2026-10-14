@@ -296,7 +296,12 @@ root data UsageReport {
 }
 root data UsagePage { entries: lst[RecordedUsage] after: i64 hasMore: bit cursor: i64 }
 root data AwaitedSpan { item: ItemId blocked: set[ItemId] truncated: bit observation: i64 }
-root data PhaseSpan { id: RequestId assignment: AssignmentId session: SessionId phase: UsagePhase startedAt: i64 finishedAt: i64 state: AttemptState check: opt[str] await: opt[AwaitedSpan] }
+// The unit that requested a span: an attempt, or another span. It states who requested the span, not that the parent waited for it.
+root adt SpanParent {
+  data Attempt { id: AttemptId }
+  data Span { id: RequestId }
+}
+root data PhaseSpan { id: RequestId assignment: AssignmentId session: SessionId phase: UsagePhase startedAt: i64 finishedAt: i64 state: AttemptState check: opt[str] await: opt[AwaitedSpan] parent: opt[SpanParent] }
 root data RetainedWait { span: PhaseSpan acknowledged: opt[i64] }
 root data PhaseUsage { phase: UsagePhase attempts: i64 spans: i64 running: i64 runningSpans: i64 open: i64 wallMillis: i64 totals: UsageTotals costs: lst[CostTotal] }
 root data PhaseReport { phases: lst[PhaseUsage] costsTruncated: bit truncatedWaits: i64 cursor: i64 }

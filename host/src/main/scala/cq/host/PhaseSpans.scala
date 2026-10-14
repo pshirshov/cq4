@@ -12,20 +12,25 @@ import scala.util.Using
 object PhaseSpans {
   private val MaxTicketBytes = 64 * 1024
   private def id(kind: String, value: UUID): RequestId = RequestId(UUID.nameUUIDFromBytes(s"$kind:$value".getBytes(UTF_8)))
+  /** The identity of the Integrate span of `value`: the parent of the checks of its rebased commit. */
+  def integrationId(value: IntegrationId): RequestId = id("integration", value.value)
 
-  /** One run of a check: from the job's registration to its last recorded transition, which for a settled job is its settlement. */
-  def check(record: JobRecord, assignment: AssignmentId, name: String): PhaseSpan = PhaseSpan(id("check", record.workspace.attempt.value), assignment,
-    record.workspace.owner, UsagePhase.Check, record.createdAt, record.updatedAt, JobOutcome.observed(record).state, Some(name), None)
+  /** One run of a check: from the job's registration to its last recorded transition, which for a settled job is its settlement.
+    * `parent` is the unit that requested the run. */
+  def check(record: JobRecord, assignment: AssignmentId, name: String, parent: Option[SpanParent]): PhaseSpan = PhaseSpan(id("check", record.workspace.attempt.value), assignment,
+    record.workspace.owner, UsagePhase.Check, record.createdAt, record.updatedAt, JobOutcome.observed(record).state, Some(name), None, parent)
   /** The start of `check` for the same job: the identity, assignment, session, phase, name and start time the finished span carries. */
-  def checkStart(record: JobRecord, assignment: AssignmentId, name: String): PhaseSpan =
+  def checkStart(record: JobRecord, assignment: AssignmentId, name: String, parent: Option[SpanParent]): PhaseSpan =
     PhaseSpan(id("check", record.workspace.attempt.value), assignment, record.workspace.owner, UsagePhase.Check, record.createdAt, record.createdAt,
-      AttemptState.Running, Some(name), None)
+      AttemptState.Running, Some(name), None, parent)
   /** The span as it stands while its work runs: no finish yet, so it adds no wall time. */
   def running(span: PhaseSpan): PhaseSpan = span.copy(finishedAt = span.startedAt, state = AttemptState.Running)
-  def integration(value: IntegrationId, assignment: AssignmentId, session: SessionId, startedAt: Long, finishedAt: Long, state: AttemptState): PhaseSpan =
-    PhaseSpan(id("integration", value.value), assignment, session, UsagePhase.Integrate, startedAt, finishedAt, state, None, None)
-  def combination(value: RequestId, assignment: AssignmentId, session: SessionId, startedAt: Long, finishedAt: Long, state: AttemptState): PhaseSpan =
-    PhaseSpan(id("combination", value.value), assignment, session, UsagePhase.Combine, startedAt, finishedAt, state, None, None)
+  def integration(value: IntegrationId, assignment: AssignmentId, session: SessionId, startedAt: Long, finishedAt: Long, state: AttemptState,
+      parent: Option[SpanParent]): PhaseSpan =
+    PhaseSpan(integrationId(value), assignment, session, UsagePhase.Integrate, startedAt, finishedAt, state, None, None, parent)
+  def combination(value: RequestId, assignment: AssignmentId, session: SessionId, startedAt: Long, finishedAt: Long, state: AttemptState,
+      parent: Option[SpanParent]): PhaseSpan =
+    PhaseSpan(id("combination", value.value), assignment, session, UsagePhase.Combine, startedAt, finishedAt, state, None, None, parent)
   def delivery(project: ProjectId, span: PhaseSpan): HostDelivery = HostDelivery.Usage(HostUsageInput(project, HostUsage.Span(span)))
 
   /** The assignment of the child of this session that produced `result`; work the governing session runs on that result belongs to it. */

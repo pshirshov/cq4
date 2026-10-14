@@ -83,7 +83,7 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
     for {
       assignment <- ZIO.attemptBlocking(PhaseSpans.producer(config.directory, result))
       results <- ZIO.interruptible(ZIO.foreach(round.failing.zipWithIndex) { case (failing, index) =>
-        validation(author, s"$label-$index", candidate, failing.original.declaration, spans.check(jobs, execution, assignment))
+        validation(author, s"$label-$index", candidate, failing.original.declaration, spans.check(jobs, execution, assignment, Some(SpanParent.Attempt(author))))
       }.raceFirst(renewed))
       evidence = results.map(_.evidence)
       // A check the session could not start ran nothing: no round is recorded for it.

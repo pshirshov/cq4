@@ -294,7 +294,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
       // Each run takes 300 ms; the first fails.
       val flaky = ValidationCheck("flaky", List("sh", "-c", s"sleep 0.3; n=$$(cat $counter 2>/dev/null || echo 0); echo $$((n + 1)) > $counter; test $$n -ge 1"), 10000, 65536, 2, 0)
       def span(f: Fixture, id: IntegrationId): Task[Option[PhaseSpan]] =
-        spans.read(f.owner.project)(_.span(PhaseSpans.integration(id, f.worker, f.owner.actor.session, 0, 0, AttemptState.Completed).id))
+        spans.read(f.owner.project)(_.span(PhaseSpans.integration(id, f.worker, f.owner.actor.session, 0, 0, AttemptState.Completed, None).id))
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(flaky), false, false) { f =>
         val task = UsageFilter.TaskOnly(f.members.head.id)
         for {
@@ -339,7 +339,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO],
         spans: UsageRepository[IO]) =>
       def span(f: Fixture, id: IntegrationId): Task[Option[PhaseSpan]] =
-        spans.read(f.owner.project)(_.span(PhaseSpans.integration(id, f.worker, f.owner.actor.session, 0, 0, AttemptState.Completed).id))
+        spans.read(f.owner.project)(_.span(PhaseSpans.integration(id, f.worker, f.owner.actor.session, 0, 0, AttemptState.Completed, None).id))
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), true, false) { f => for {
         // A conflicting preparation runs no check; the first integration is applied and records NotApplied, the second is never applied.
         applied <- f.prepare
@@ -546,10 +546,10 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
             assert(workspace.admission == WorkspaceAdmission.Removed, workspace.toString)
           }
           // I20: the stopped run is a Cancelled Check span and the failed preparation a Failed Integrate span.
-          recorded <- spans.read(f.owner.project)(reader => List(PhaseSpans.check(record, f.worker, "slow").id,
-            PhaseSpans.integration(id, f.worker, f.owner.actor.session, 0, 0, AttemptState.Failed).id).map(reader.span))
+          recorded <- spans.read(f.owner.project)(reader => List(PhaseSpans.check(record, f.worker, "slow", None).id,
+            PhaseSpans.integration(id, f.worker, f.owner.actor.session, 0, 0, AttemptState.Failed, None).id).map(reader.span))
           _ <- ZIO.attempt(assert(recorded.map(_.map(value => (value.phase, value.state))) == List(Some((UsagePhase.Check, AttemptState.Cancelled)),
-            Some((UsagePhase.Integrate, AttemptState.Failed))) && recorded.head.contains(PhaseSpans.check(record, f.worker, "slow")), recorded.toString))
+            Some((UsagePhase.Integrate, AttemptState.Failed))) && recorded.head.contains(PhaseSpans.check(record, f.worker, "slow", None)), recorded.toString))
         } yield ()
       }
     }

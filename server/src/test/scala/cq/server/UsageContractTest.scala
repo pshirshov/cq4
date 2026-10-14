@@ -518,7 +518,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       val host = collector(owner)
       val session = UsageFilter.SessionOnly(owner.actor.session)
       def span(assignment: AssignmentId, phase: UsagePhase, startedAt: Long, finishedAt: Long, state: AttemptState): PhaseSpan =
-        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, phase, startedAt, finishedAt, state, None, None)
+        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, phase, startedAt, finishedAt, state, None, None, None)
       for {
         _ <- ledger.initialize(owner, "phase spans")
         item <- task(ledger, owner, "Checked task")
@@ -573,7 +573,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       val host = collector(owner)
       val filters = List(UsageFilter.SessionOnly(owner.actor.session), UsageFilter.ProjectAll())
       def started(assignment: AssignmentId, phase: UsagePhase, at: Long, name: Option[String]): PhaseSpan =
-        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, phase, at, at, AttemptState.Running, name, None)
+        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, phase, at, at, AttemptState.Running, name, None, None)
       def ended(span: PhaseSpan, at: Long, state: AttemptState): PhaseSpan = span.copy(finishedAt = at, state = state)
       // spans, running host spans, running attempts and wall time of the row, with the check rows of the same read.
       def figures(filter: UsageFilter, phase: UsagePhase): IO[Throwable, ((Long, Long, Long, Long), List[(Option[String], AttemptState, Long, Long)])] = for {
@@ -665,7 +665,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
       val host = collector(owner)
       def check(assignment: AssignmentId, name: Option[String], startedAt: Long, finishedAt: Long, state: AttemptState): PhaseSpan =
-        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, UsagePhase.Check, startedAt, finishedAt, state, name, None)
+        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, UsagePhase.Check, startedAt, finishedAt, state, name, None, None)
       def entries(report: CheckReport): List[(Option[String], AttemptState, Long, Long)] = report.checks.map(value => (value.check, value.state, value.runs, value.wallMillis))
       def phase(report: PhaseReport): (Long, Long) = report.phases.find(_.phase == UsagePhase.Check).map(value => (value.spans, value.wallMillis)).getOrElse((0L, 0L))
       def consistent(filter: UsageFilter): IO[Throwable, CheckReport] = for {
@@ -698,7 +698,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         _ <- usage.span(host, check(work.assignment, None, 5000, 5000, AttemptState.Unknown))
         _ <- usage.span(host, check(work.assignment, Some("unit"), 4200, 4210, AttemptState.Completed))
         _ <- usage.span(host, check(separate.assignment, Some("lint"), 100, 105, AttemptState.Unknown))
-        _ <- usage.span(host, PhaseSpan(RequestId(UUID.randomUUID()), work.assignment, owner.actor.session, UsagePhase.Integrate, 6000, 8500, AttemptState.Cancelled, None, None))
+        _ <- usage.span(host, PhaseSpan(RequestId(UUID.randomUUID()), work.assignment, owner.actor.session, UsagePhase.Integrate, 6000, 8500, AttemptState.Cancelled, None, None, None))
         _ <- usage.span(host, check(work.assignment, Some("unit"), 1, 8, AttemptState.Completed).copy(session = other.actor.session))
         long = Some("c" * 300)
         session <- consistent(UsageFilter.SessionOnly(owner.actor.session))
@@ -727,7 +727,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         item <- task(ledger, owner, "Ordered task")
         work <- phased(usage, owner, item, Role.Worker, UsagePhase.Work, 1000)
         names = (0 until 199).map(index => f"a$index%03d").toList ++ List("\uE000", new String(Character.toChars(0x10000)))
-        _ <- ZIO.foreachDiscard(names)(name => usage.span(host, PhaseSpan(RequestId(UUID.randomUUID()), work.assignment, owner.actor.session, UsagePhase.Check, 10, 20, AttemptState.Completed, Some(name), None)))
+        _ <- ZIO.foreachDiscard(names)(name => usage.span(host, PhaseSpan(RequestId(UUID.randomUUID()), work.assignment, owner.actor.session, UsagePhase.Check, 10, 20, AttemptState.Completed, Some(name), None, None)))
         report <- usage.checks(owner, UsageFilter.ProjectAll())
         _ <- assertIO(report.truncated && report.checks.size == 200 && report.checks.last.check == Some("\uE000"))
       } yield ()
@@ -739,7 +739,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       val governing = assignment(owner, Set.empty, Attribution.Unattributed, None).copy(evaluation = None)
       val elsewhere = governing.copy(id = AssignmentId(UUID.randomUUID()))
       def wait(id: RequestId, item: ItemId, blocked: Set[ItemId], start: Long, finish: Long, state: AttemptState, observation: Long, truncated: Boolean = false): PhaseSpan =
-        PhaseSpan(id, governing.id, owner.actor.session, UsagePhase.Await, start, finish, state, None, Some(AwaitedSpan(item, blocked, truncated, observation)))
+        PhaseSpan(id, governing.id, owner.actor.session, UsagePhase.Await, start, finish, state, None, Some(AwaitedSpan(item, blocked, truncated, observation)), None)
       def observation(span: PhaseSpan, number: Long): PhaseSpan = span.copy(await = span.await.map(_.copy(observation = number)))
       def blockedBy(span: PhaseSpan): Set[ItemId] = span.await.get.blocked
       def row(report: PhaseReport): Option[PhaseUsage] = report.phases.find(_.phase == UsagePhase.Await)
@@ -843,6 +843,86 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(byBlocked.truncatedWaits == 2 && byOther.truncatedWaits == 3)
         again <- usage.phases(owner, UsageFilter.SessionOnly(owner.actor.session))
         _ <- assertIO(figures(again) == figures(bySession) && again.cursor == bySession.cursor)
+      } yield ()
+    }
+
+    "T93: record the unit that requested a span as its fixed parent, register a span parent before or after its child and refuse every change" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      val host = collector(owner)
+      def span(assignment: AssignmentId, phase: UsagePhase, at: Long, name: Option[String], parent: Option[SpanParent]): PhaseSpan =
+        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, phase, at, at, AttemptState.Running, name, None, parent)
+      def ended(value: PhaseSpan, at: Long, state: AttemptState): PhaseSpan = value.copy(finishedAt = at, state = state)
+      // The stored span and the audit cursor, read by replaying the registration that is stored.
+      def unchanged(stored: PhaseSpan, cursor: Long): IO[Throwable, Unit] = for {
+        read <- usage.span(host, stored)
+        after <- usage.cursor(owner)
+        _ <- assertIO(read == stored && after == cursor)
+      } yield ()
+      def refused(value: PhaseSpan, stored: PhaseSpan)(expected: Fault => Boolean): IO[Throwable, Unit] = for {
+        before <- usage.cursor(owner)
+        _ <- denied(usage.span(host, value))(expected)
+        _ <- unchanged(stored, before)
+      } yield ()
+      for {
+        _ <- ledger.initialize(owner, "span parent")
+        item <- task(ledger, owner, "Parented task")
+        governing <- phased(usage, owner, item, Role.Governor, UsagePhase.Govern, 1000)
+        reviewer <- phased(usage, owner, item, Role.Reviewer, UsagePhase.Review, 2000)
+        // Without a parent, and as stored.
+        plain = span(governing.assignment, UsagePhase.Check, 3000, Some("plain"), None)
+        _ <- usage.span(host, plain).flatMap(stored => assertIO(stored == plain && stored.parent.isEmpty))
+        // An Integrate span whose parent is the governing attempt, and a Check whose parent is that Integrate span.
+        integration = span(governing.assignment, UsagePhase.Integrate, 10000, None, Some(SpanParent.Attempt(governing.id)))
+        check = span(governing.assignment, UsagePhase.Check, 11000, Some("verify"), Some(SpanParent.Span(integration.id)))
+        // The child is registered first: its parent span is not registered yet.
+        stored <- usage.span(host, check)
+        _ <- assertIO(stored == check && stored.parent.contains(SpanParent.Span(integration.id)))
+        stored <- usage.span(host, integration)
+        _ <- assertIO(stored == integration && stored.parent.contains(SpanParent.Attempt(governing.id)))
+        // A check the reviewer declared names the reviewer's attempt.
+        declared = span(reviewer.assignment, UsagePhase.Check, 12000, Some("declared"), Some(SpanParent.Attempt(reviewer.id)))
+        _ <- usage.span(host, declared).flatMap(value => assertIO(value == declared))
+        // The finish keeps the parent; the start replayed after it returns the stored span.
+        done = ended(check, 15000, AttemptState.Completed)
+        finishedSpan <- usage.span(host, done)
+        _ <- assertIO(finishedSpan == done && finishedSpan.parent == check.parent)
+        _ <- usage.span(host, check).flatMap(value => assertIO(value == done && value.parent == check.parent))
+        _ <- usage.span(host, ended(integration, 16000, AttemptState.Completed)).flatMap(value => assertIO(value.parent == integration.parent))
+        // Registration refusals leave the stored span and the cursor as they were.
+        unknown = span(governing.assignment, UsagePhase.Check, 20000, Some("orphan"), Some(SpanParent.Attempt(AttemptId(UUID.randomUUID()))))
+        selfId = RequestId(UUID.randomUUID())
+        itself = span(governing.assignment, UsagePhase.Check, 21000, Some("self"), None).copy(id = selfId, parent = Some(SpanParent.Span(selfId)))
+        beforeNew <- usage.cursor(owner)
+        _ <- denied(usage.span(host, unknown))(_.isInstanceOf[Fault.Missing])
+        _ <- denied(usage.span(host, itself))(_.isInstanceOf[Fault.Invalid])
+        _ <- usage.cursor(owner).flatMap(after => assertIO(after == beforeNew))
+        // A parent that is an attempt of another project is not a registered attempt of this one.
+        other = scope()
+        foreign <- ledger.initialize(other, "span parent elsewhere") *> task(ledger, other, "Elsewhere").flatMap(phased(usage, other, _, Role.Governor, UsagePhase.Govern, 1000))
+        _ <- denied(usage.span(host, span(governing.assignment, UsagePhase.Check, 22000, Some("foreign"), Some(SpanParent.Attempt(foreign.id)))))(_.isInstanceOf[Fault.Missing])
+        _ <- usage.cursor(owner).flatMap(after => assertIO(after == beforeNew))
+        // Another parent, a parent where none is stored and no parent where one is stored.
+        _ <- refused(done.copy(parent = Some(SpanParent.Attempt(governing.id))), done)(_.isInstanceOf[Fault.Invalid])
+        _ <- refused(done.copy(parent = Some(SpanParent.Span(declared.id))), done)(_.isInstanceOf[Fault.Invalid])
+        _ <- refused(done.copy(parent = None), done)(_.isInstanceOf[Fault.Invalid])
+        _ <- refused(ended(plain, 4000, AttemptState.Completed).copy(parent = Some(SpanParent.Attempt(governing.id))), plain)(_.isInstanceOf[Fault.Invalid])
+        _ <- refused(plain.copy(parent = Some(SpanParent.Span(integration.id))), plain)(_.isInstanceOf[Fault.Invalid])
+        _ <- refused(declared.copy(parent = Some(SpanParent.Attempt(governing.id))), declared)(_.isInstanceOf[Fault.Invalid])
+        _ <- refused(ended(declared, 13000, AttemptState.Failed).copy(parent = None), declared)(_.isInstanceOf[Fault.Invalid])
+        // A wait is a span with a parent too, and the parent is as fixed as its awaited item.
+        wait = PhaseSpan(RequestId(UUID.randomUUID()), governing.assignment, owner.actor.session, UsagePhase.Await, 30000, 30000, AttemptState.Running, None,
+          Some(AwaitedSpan(item, Set(item), false, 1)), Some(SpanParent.Attempt(governing.id)))
+        _ <- usage.span(host, wait).flatMap(value => assertIO(value == wait))
+        later = wait.copy(finishedAt = 31000, await = wait.await.map(_.copy(observation = 2)))
+        _ <- usage.span(host, later).flatMap(value => assertIO(value == later && value.parent == wait.parent))
+        _ <- refused(later.copy(await = later.await.map(_.copy(observation = 3)), parent = None), later)(_.isInstanceOf[Fault.Invalid])
+        // Parents do not change what the phase report and the check report hold.
+        phases <- usage.phases(owner, UsageFilter.SessionOnly(owner.actor.session))
+        checks <- usage.checks(owner, UsageFilter.SessionOnly(owner.actor.session))
+        row = phases.phases.find(_.phase == UsagePhase.Check).map(value => (value.spans, value.runningSpans, value.wallMillis))
+        _ <- assertIO(row.contains((3L, 2L, 4000L)))
+        _ <- assertIO(checks.checks.map(value => (value.check, value.state, value.runs, value.wallMillis)).toSet == Set(
+          (Some("plain"), AttemptState.Running, 1L, 0L), (Some("verify"), AttemptState.Completed, 1L, 4000L), (Some("declared"), AttemptState.Running, 1L, 0L)))
       } yield ()
     }
 

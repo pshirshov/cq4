@@ -3,7 +3,7 @@ package cq.core
 import cq.api.*
 
 /** The registration of a span of the phase `Await`, which is observed more than once while it runs. The rules apply in this order:
-  * a registration whose fixed fields (assignment, session, phase, awaited item, start time) differ from the stored span is refused;
+  * a registration whose fixed fields (assignment, session, phase, awaited item, parent, start time) differ from the stored span is refused;
   * the same observation number returns the stored span for identical content and is a conflict for other content; a lower number
   * returns the stored span; a higher number replaces a Running span whose finish time it does not lower, whose blocked items it keeps
   * and whose truncation flag it does not clear, and is refused otherwise or when the stored span has ended. */
@@ -22,8 +22,8 @@ object AwaitedSpans {
     case (None, _) => Store
     case (Some(old), Some(wait)) if old.await.isDefined =>
       val before = old.await.get
-      if ((old.assignment, old.session, old.phase, before.item, old.startedAt) != (value.assignment, value.session, value.phase, wait.item, value.startedAt))
-        Refused(Fault.Invalid("A wait's assignment, session, phase, awaited item and start time cannot change"))
+      if ((old.assignment, old.session, old.phase, before.item, old.parent, old.startedAt) != (value.assignment, value.session, value.phase, wait.item, value.parent, value.startedAt))
+        Refused(Fault.Invalid("A wait's assignment, session, phase, awaited item, parent and start time cannot change"))
       else if (wait.observation == before.observation) {
         if (old == value) Existing(old) else Refused(Fault.Conflict("Observation number reused with different content"))
       } else if (wait.observation < before.observation) Existing(old)

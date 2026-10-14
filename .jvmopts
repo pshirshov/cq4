@@ -1,1 +1,3 @@
 --sun-misc-unsafe-memory-access=allow
+-Xmx6g
+-Xss16m
