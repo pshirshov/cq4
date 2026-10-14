@@ -61,6 +61,21 @@ final class WorkflowCatalogLocal extends AnyWordSpec {
       }
     }
 
+    "ask the Governor's modes for a recommended tier and reason on every Task it writes" in {
+      val assets = new WorkflowAssets
+      List(ProcessMode.CrossCutting, ProcessMode.Yolo).foreach { mode =>
+        val section = assets.resource(ProcessModes.of(mode).instructions)
+        assert(section.length <= 16384)
+        assert(section.contains("recommendation") && List("Fast", "Standard", "Frontier").forall(section.contains), mode)
+        assert(section.contains("still accepted"), mode)
+        List(WorkflowRequest.Begin(Set.empty), WorkflowRequest.Advance(Set.empty, WorkflowPhase.Work)).foreach { request =>
+          assert(assets.instructions(request, mode).contains(section), (mode, request))
+        }
+      }
+      assert(assets.resource(ProcessModes.of(ProcessMode.Yolo).instructions).contains("no effect on a Task you implement yourself"))
+      assert(!assets.resource(ProcessModes.of(ProcessMode.Rigorous).instructions).contains("recommendation"))
+    }
+
     "define arguments that agree with the generated WorkflowRequest model" in {
       val schemas = parser.parse(text("cq-schemas.json")).fold(throw _, identity)
       def schema(name: String): Json = schemas.hcursor.downField(s"cq_api_$name").focus.getOrElse(fail(s"Missing schema $name"))
