@@ -90,6 +90,46 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         } yield ()
     }
 
+    "serve the unit times through the usage selection with the authorization of the phase report" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val auth = authorization(Now)
+        val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
+        val project = ProjectId(UUID.randomUUID())
+        val other = ProjectId(UUID.randomUUID())
+        val collector = Scope(project, Actor("collector", SessionId(UUID.randomUUID()), Role.Collector))
+        val assignment = Assignment(AssignmentId(UUID.randomUUID()), project, Set.empty, Attribution.Unattributed, None, None)
+        val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, collector.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None)
+        val grant = auth.grant(root, GrantRequest(project, Actor("worker", SessionId(UUID.randomUUID()), Role.Worker), Now + 10000)).value
+        val transport = new Transport(application, auth, AccessConfig(Token, "http://localhost"), new McpSchemas(), null, null, null, null)
+        def mcp(arguments: String): zio.Task[io.circe.Json] = {
+          import org.http4s.{Header, Method, Request, Uri}
+          import zio.interop.catz.*
+          val body = s"""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"usage","arguments":$arguments}}"""
+          transport.routes(null).orNotFound.run(Request[zio.Task](Method.POST, Uri.unsafeFromString("/mcp")).withEntity(body)
+            .putHeaders(Header.Raw(org.typelevel.ci.CIString("Authorization"), "Bearer " + grant))).flatMap(_.as[String])
+            .map(io.circe.parser.parse(_).fold(throw _, identity))
+        }
+        def units(target: ProjectId): String = s"""{"project":{"value":"${target.value}"},"selection":{"Units":{"filter":{"SessionOnly":{"id":{"value":"${collector.actor.session.value}"}}},"window":null,"limit":10,"continuation":null}}}"""
+        for {
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "units")))
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(other, "http://localhost", "other")))
+          _ <- usage.assign(collector, assignment)
+          _ <- usage.start(collector, attempt)
+          served <- mcp(units(project))
+          content = served.hcursor.downField("result").downField("structuredContent")
+          _ <- assertIO(served.hcursor.downField("result").get[Boolean]("isError") == Right(false))
+          reply <- ZIO.fromEither(Result_JsonCodec.decode(baboon.runtime.shared.BaboonCodecContext.Default, content.focus.get)).mapError(e => new AssertionError(e.toString))
+          _ <- assertIO(reply match {
+            case Result.UsageUnits(report) => report.units.map(u => (u.key, u.phase, u.state)) == List((UnitKey.Attempt(attempt.id), UsagePhase.Govern, AttemptState.Running)) && report.window.nonEmpty
+            case _ => false
+          })
+          crossed <- mcp(units(other))
+          _ <- assertIO(crossed.hcursor.downField("result").get[Boolean]("isError") == Right(true))
+          _ <- assertIO(crossed.hcursor.downField("result").downField("structuredContent").downField("Failed").downField("fault").downField("Denied").succeeded)
+        } yield ()
+    }
+
     "serve the command and agent catalogs through the typed read path to project readers" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)

@@ -957,12 +957,396 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
   }
+
+  private final class Tick(var now: Long) extends java.time.Clock {
+    override def getZone: java.time.ZoneId = java.time.ZoneOffset.UTC
+    override def withZone(zone: java.time.ZoneId): java.time.Clock = this
+    override def instant(): java.time.Instant = java.time.Instant.ofEpochMilli(now)
+    override def millis(): Long = now
+  }
+  private def ms(seconds: Long): Long = seconds * 1000L
+  private def timeSplit(running: Long, waiting: Long, governing: Long, unobserved: Long, idle: Long): TimeSplit =
+    TimeSplit(ms(running), ms(waiting), ms(governing), ms(unobserved), ms(idle))
+  private def splitSum(split: TimeSplit): Long = split.running + split.waiting + split.governing + split.unobserved + split.idle
+  private def windowLength(report: UnitReport): Long = report.window.fold(0L)(w => w.until - w.from)
+  private def keyOf(attempt: Attempt): UnitKey = UnitKey.Attempt(attempt.id)
+  private def keyOf(span: PhaseSpan): UnitKey = UnitKey.Span(span.id)
+  private def unitId(key: UnitKey): String = key match {
+    case UnitKey.Attempt(id) => "A:" + id.value
+    case UnitKey.Span(id) => "S:" + id.value
+  }
+
+  /** A project with a settable clock: the service under test is built over the injected repository, so the fixture's clock is not the DI one. */
+  private final class Rig(repository: UsageRepository[IO], ledger: LedgerService[IO]) {
+    val owner: Scope = scope()
+    val clock = new Tick(0)
+    val usage: UsageService[IO] = new UsageService.Impl[IO](repository, ledger, clock)
+    val session: SessionId = owner.actor.session
+    val host: Scope = collector(owner)
+    val work: Assignment = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
+    def init(): IO[Throwable, Unit] = ledger.initialize(owner, "unit times").flatMap(_ => usage.assign(host, work)).unit
+    def attempt(start: Long, phase: UsagePhase = UsagePhase.Work, role: Role = Role.Worker, parent: Option[Attempt] = None, attached: Boolean = false,
+      assignment: Assignment = work, in: Option[SessionId] = None): Attempt =
+      Attempt(AttemptId(UUID.randomUUID()), assignment.id, parent.map(_.id), in.getOrElse(session), role, Harness.Codex, "p", "m",
+        if (attached) AttemptObservation.AttachedGovernorCollector else "fixture-v1", ms(start), phase, None)
+    def governing(start: Long, attached: Boolean): Attempt = attempt(start, UsagePhase.Govern, Role.Governor, None, attached)
+    def begin(value: Attempt): IO[Throwable, Attempt] = usage.start(host, value)
+    def end(value: Attempt, at: Long, state: AttemptState = AttemptState.Completed): IO[Throwable, AttemptOutcome] =
+      usage.finish(host, AttemptOutcome(RequestId(UUID.randomUUID()), value.id, state, ms(at), Nil, None))
+    /** An attempt that ran from `start` to `finish`. */
+    def ran(start: Long, finish: Long, phase: UsagePhase = UsagePhase.Work, role: Role = Role.Worker, parent: Option[Attempt] = None, assignment: Assignment = work,
+      in: Option[SessionId] = None): IO[Throwable, Attempt] = {
+      val value = attempt(start, phase, role, parent, false, assignment, in)
+      begin(value).flatMap(_ => end(value, finish)).as(value)
+    }
+    def span(phase: UsagePhase, start: Long, finish: Long, state: AttemptState = AttemptState.Completed, parent: Option[SpanParent] = None, check: Option[String] = None,
+      await: Option[AwaitedSpan] = None, assignment: Assignment = work, in: Option[SessionId] = None): PhaseSpan =
+      PhaseSpan(RequestId(UUID.randomUUID()), assignment.id, in.getOrElse(session), phase, ms(start), ms(finish), state, check, await, parent)
+    def put(value: PhaseSpan): IO[Throwable, PhaseSpan] = usage.span(host, value)
+    def read(filter: UsageFilter = UsageFilter.ProjectAll(), window: Option[(Long, Long)] = None, limit: Int = 200, after: Option[UnitContinuation] = None): IO[Throwable, UnitReport] =
+      usage.units(owner, filter, window.map { case (from, until) => UnitWindowRequest(ms(from), ms(until)) }, limit, after)
+    def unit(report: UnitReport, key: UnitKey): UnitTime = report.units.find(_.key == key).getOrElse(throw new AssertionError("Unit not listed: " + key))
+    def category(report: UnitReport, kind: UnitKind, phase: UsagePhase, check: Option[String] = None): UnitCategoryTime =
+      report.categories.find(c => c.category == UnitCategory(kind, phase, check)).getOrElse(throw new AssertionError("Category missing"))
+  }
+
+  protected def adapter: String
+
+  "Unit times (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "S1: an attached governing attempt with one Work attempt leaves a tail unobserved" in { (repository: UsageRepository[IO], ledger: LedgerService[IO]) =>
+      val rig = new Rig(repository, ledger)
+      for {
+        _ <- rig.init()
+        governing <- rig.begin(rig.governing(0, attached = true))
+        _ <- rig.ran(10, 30, parent = Some(governing))
+        _ = rig.clock.now = ms(100)
+        report <- rig.read(window = Some((0, 60)))
+        _ <- assertIO(report.split == timeSplit(20, 0, 10, 30, 0) && splitSum(report.split) == windowLength(report) && windowLength(report) == ms(60))
+        _ <- assertIO(report.window.contains(UnitWindow(0, ms(60), true, true)) && report.lastObserved.contains(ms(30)) && report.readTime == ms(100))
+      } yield ()
+    }
+    "S2 and S3: a managed governing attempt is observed to the read time or to its outcome" in { (repository: UsageRepository[IO], ledger: LedgerService[IO]) =>
+      val rig = new Rig(repository, ledger)
+      for {
+        _ <- rig.init()
+        governing <- rig.begin(rig.governing(0, attached = false))
+        _ <- rig.ran(10, 30, parent = Some(governing))
+        _ = rig.clock.now = ms(60)
+        managed <- rig.read()
+        _ <- assertIO(managed.split == timeSplit(20, 0, 40, 0, 0) && splitSum(managed.split) == windowLength(managed))
+        _ <- assertIO(managed.window.contains(UnitWindow(0, ms(60), false, false)))
+        _ <- rig.end(governing, 50)
+        closed <- rig.read(window = Some((0, 60)))
+        _ <- assertIO(closed.split == timeSplit(20, 0, 30, 0, 10) && splitSum(closed.split) == windowLength(closed))
+      } yield ()
+    }
+    "S4 and S5: a running host span counts to the read time and an interrupted one ends at recovery" in { (repository: UsageRepository[IO], ledger: LedgerService[IO]) =>
+      val rig = new Rig(repository, ledger)
+      for {
+        _ <- rig.init()
+        governing <- rig.begin(rig.governing(0, attached = true))
+        running = rig.span(UsagePhase.Check, 10, 10, AttemptState.Running, check = Some("cq-fast"))
+        _ <- rig.put(running)
+        _ = rig.clock.now = ms(25)
+        first <- rig.read()
+        _ <- assertIO(first.window.contains(UnitWindow(0, ms(25), true, false)) && first.split == timeSplit(15, 0, 10, 0, 0) && splitSum(first.split) == windowLength(first))
+        _ <- assertIO(rig.unit(first, keyOf(running)).duration == ms(15) && rig.unit(first, keyOf(running)).state == AttemptState.Running && rig.unit(first, keyOf(running)).finishedAt.isEmpty)
+        _ = rig.clock.now = ms(100)
+        later <- rig.read()
+        _ <- assertIO(later.split == timeSplit(90, 0, 10, 0, 0) && splitSum(later.split) == windowLength(later))
+        _ <- rig.put(running.copy(state = AttemptState.Unknown, finishedAt = ms(200)))
+        _ <- rig.end(governing, 200, AttemptState.Unknown)
+        recovered <- rig.read(window = Some((0, 200)))
+        check = rig.unit(recovered, keyOf(running))
+        _ <- assertIO(check.duration == ms(190) && check.state == AttemptState.Unknown && check.finishedAt.contains(ms(200)))
+        _ <- assertIO(recovered.split == timeSplit(190, 0, 10, 0, 0) && splitSum(recovered.split) == windowLength(recovered))
+      } yield ()
+    }
+    "S6: work whose start has not reached the server is absent until it is delivered" in { (repository: UsageRepository[IO], ledger: LedgerService[IO]) =>
+      val rig = new Rig(repository, ledger)
+      for {
+        _ <- rig.init()
+        _ <- rig.begin(rig.governing(0, attached = true))
+        _ <- rig.put(rig.span(UsagePhase.Integrate, 10, 10))
+        _ = rig.clock.now = ms(100)
+        before <- rig.read(window = Some((0, 25)))
+        _ <- assertIO(before.split == timeSplit(0, 0, 10, 15, 0) && splitSum(before.split) == windowLength(before))
+        _ <- rig.put(rig.span(UsagePhase.Check, 10, 40, check = Some("cq-fast")))
+        after <- rig.read(window = Some((0, 25)))
+        _ <- assertIO(after.split == timeSplit(15, 0, 10, 0, 0) && splitSum(after.split) == windowLength(after))
+      } yield ()
+    }
+    "S7 and parallel units: own time is structural and category totals overlap" in { (repository: UsageRepository[IO], ledger: LedgerService[IO]) =>
+      val rig = new Rig(repository, ledger)
+      for {
+        _ <- rig.init()
+        governing <- rig.begin(rig.governing(0, attached = false))
+        review <- rig.ran(0, 100, UsagePhase.Review, Role.Reviewer, Some(governing))
+        check = rig.span(UsagePhase.Check, 20, 60, parent = Some(SpanParent.Attempt(review.id)), check = Some("cq-fast"))
+        _ <- rig.put(check)
+        a <- rig.ran(0, 60)
+        b <- rig.ran(0, 60)
+        c1 <- rig.ran(10, 50, parent = Some(governing))
+        c2 <- rig.ran(30, 70, parent = Some(governing))
+        _ <- rig.end(governing, 100)
+        report <- rig.read()
+        _ <- assertIO(rig.unit(report, keyOf(review)).duration == ms(100) && rig.unit(report, keyOf(review)).ownTime == ms(60))
+        _ <- assertIO(rig.unit(report, keyOf(check)).duration == ms(40) && rig.unit(report, keyOf(check)).ownTime == ms(40))
+        reviews = rig.category(report, UnitKind.Attempt, UsagePhase.Review)
+        _ <- assertIO(reviews.total == ms(100) && reviews.ownTotal == ms(60) && reviews.units == 1)
+        _ <- assertIO(rig.unit(report, keyOf(governing)).duration == ms(100) && rig.unit(report, keyOf(governing)).ownTime == 0)
+        works = rig.category(report, UnitKind.Attempt, UsagePhase.Work)
+        _ <- assertIO(works.total == ms(60 + 60 + 40 + 40) && works.units == 4)
+        _ <- assertIO(rig.category(report, UnitKind.Span, UsagePhase.Check, Some("cq-fast")).total == ms(40))
+        _ <- assertIO(rig.unit(report, keyOf(c1)).parent.contains(keyOf(governing)) && rig.unit(report, keyOf(a)).ownTime == ms(60))
+        _ <- assertIO(report.split.running == ms(100) && splitSum(report.split) == windowLength(report))
+      } yield ()
+    }
+    "own time of a parent is its duration minus the union of parallel children" in { (repository: UsageRepository[IO], ledger: LedgerService[IO]) =>
+      val rig = new Rig(repository, ledger)
+      for {
+        _ <- rig.init()
+        governing <- rig.begin(rig.governing(0, attached = false))
+        _ <- rig.ran(10, 50, parent = Some(governing))
+        _ <- rig.ran(30, 70, parent = Some(governing))
+        _ <- rig.end(governing, 100)
+        report <- rig.read()
+        _ <- assertIO(rig.unit(report, keyOf(governing)).ownTime == ms(40))
+      } yield ()
+    }
+    "a closed wait is waiting, and a running wait is observed to its last observation" in { (repository: UsageRepository[IO], ledger: LedgerService[IO]) =>
+      val rig = new Rig(repository, ledger)
+      val awaited = ItemId(rig.owner.project, Ledger.Questions, 1)
+      for {
+        _ <- rig.init()
+        governing <- rig.begin(rig.governing(0, attached = false))
+        _ <- rig.put(rig.span(UsagePhase.Await, 20, 50, await = Some(AwaitedSpan(awaited, Set.empty, false, 1)), parent = Some(SpanParent.Attempt(governing.id))))
+        _ <- rig.ran(30, 40, parent = Some(governing))
+        _ <- rig.end(governing, 60)
+        report <- rig.read()
+        _ <- assertIO(report.split == timeSplit(10, 20, 30, 0, 0) && splitSum(report.split) == windowLength(report))
+        other = new Rig(repository, ledger)
+        _ <- other.init()
+        attached <- other.begin(other.governing(0, attached = true))
+        _ <- other.put(other.span(UsagePhase.Await, 20, 40, AttemptState.Running, await = Some(AwaitedSpan(ItemId(other.owner.project, Ledger.Questions, 1), Set.empty, false, 1))))
+        _ = other.clock.now = ms(100)
+        beyond <- other.read(window = Some((0, 60)))
+        _ <- assertIO(beyond.split == timeSplit(0, 20, 20, 20, 0) && splitSum(beyond.split) == windowLength(beyond) && beyond.window.exists(_.open))
+      } yield ()
+    }
+    "each filter returns exactly its units, lists a parent outside the scope as stored and keeps the existing reads" in { (repository: UsageRepository[IO], ledger: LedgerService[IO]) =>
+      val rig = new Rig(repository, ledger)
+      val cohortOne = UUID.randomUUID()
+      val cohortTwo = UUID.randomUUID()
+      val sessionTwo = SessionId(UUID.randomUUID())
+      for {
+        _ <- rig.init()
+        t1 <- task(ledger, rig.owner, "One")
+        t2 <- task(ledger, rig.owner, "Two")
+        t3 <- task(ledger, rig.owner, "Three")
+        t4 <- task(ledger, rig.owner, "Four")
+        shared = Assignment(AssignmentId(UUID.randomUUID()), rig.owner.project, Set(t1, t2), Attribution.Shared, Some(cohortOne), Some(EvaluationScope("runA", "s1", false)))
+        direct = Assignment(AssignmentId(UUID.randomUUID()), rig.owner.project, Set(t3), Attribution.Direct, Some(cohortTwo), Some(EvaluationScope("runA", "s2", false)))
+        other = Assignment(AssignmentId(UUID.randomUUID()), rig.owner.project, Set.empty, Attribution.Unattributed, None, Some(EvaluationScope("runB", "s1", false)))
+        _ <- rig.usage.assign(rig.host, shared)
+        _ <- rig.usage.assign(rig.host, direct)
+        _ <- rig.usage.assign(rig.host, other)
+        g <- rig.begin(rig.attempt(0, UsagePhase.Govern, Role.Governor, None, false, other))
+        a1 <- rig.ran(10, 30, parent = Some(g), assignment = shared)
+        a2 <- rig.ran(20, 40, parent = Some(g), assignment = shared)
+        d1 <- rig.ran(5, 15, assignment = direct, in = Some(sessionTwo))
+        _ <- rig.end(g, 100)
+        chk = rig.span(UsagePhase.Check, 40, 45, check = Some("cq-fast"), assignment = shared)
+        _ <- rig.put(chk)
+        w1 = rig.span(UsagePhase.Await, 50, 60, await = Some(AwaitedSpan(ItemId(rig.owner.project, Ledger.Questions, 1), Set(t1), false, 1)), assignment = other)
+        w2 = rig.span(UsagePhase.Await, 70, 80, await = Some(AwaitedSpan(ItemId(rig.owner.project, Ledger.Questions, 2), Set(t3), false, 1)), assignment = other)
+        _ <- rig.put(w1)
+        _ <- rig.put(w2)
+        _ = rig.clock.now = ms(200)
+        keys = (filter: UsageFilter) => rig.read(filter).map(_.units.map(_.key).toSet)
+        everything = Set(keyOf(g), keyOf(a1), keyOf(a2), keyOf(d1), keyOf(chk), keyOf(w1), keyOf(w2))
+        project <- keys(UsageFilter.ProjectAll())
+        one <- keys(UsageFilter.TaskOnly(t1))
+        two <- keys(UsageFilter.TaskOnly(t2))
+        three <- keys(UsageFilter.TaskOnly(t3))
+        first <- keys(UsageFilter.CohortOnly(cohortOne))
+        second <- keys(UsageFilter.CohortOnly(cohortTwo))
+        sessionOne <- keys(UsageFilter.SessionOnly(rig.session))
+        sessionB <- keys(UsageFilter.SessionOnly(sessionTwo))
+        runA <- keys(UsageFilter.EvaluationOnly("runA", None))
+        runAs1 <- keys(UsageFilter.EvaluationOnly("runA", Some("s1")))
+        runAs2 <- keys(UsageFilter.EvaluationOnly("runA", Some("s2")))
+        runB <- keys(UsageFilter.EvaluationOnly("runB", None))
+        _ <- assertIO(project == everything)
+        _ <- assertIO(one == Set(keyOf(a1), keyOf(a2), keyOf(chk), keyOf(w1)))
+        _ <- assertIO(two == Set(keyOf(a1), keyOf(a2), keyOf(chk)))
+        _ <- assertIO(three == Set(keyOf(d1), keyOf(w2)))
+        _ <- assertIO(first == Set(keyOf(a1), keyOf(a2), keyOf(chk)) && second == Set(keyOf(d1)))
+        _ <- assertIO(sessionOne == everything - keyOf(d1) && sessionB == Set(keyOf(d1)))
+        _ <- assertIO(runA == Set(keyOf(a1), keyOf(a2), keyOf(chk), keyOf(d1)) && runAs1 == Set(keyOf(a1), keyOf(a2), keyOf(chk)) && runAs2 == Set(keyOf(d1)))
+        _ <- assertIO(runB == Set(keyOf(g), keyOf(w1), keyOf(w2)))
+        taskReport <- rig.read(UsageFilter.TaskOnly(t1))
+        _ <- assertIO(rig.unit(taskReport, keyOf(a1)).parent.contains(keyOf(g)) && rig.unit(taskReport, keyOf(a1)).ownTime == rig.unit(taskReport, keyOf(a1)).duration)
+        _ <- assertIO(rig.unit(taskReport, keyOf(a1)).duration == ms(20))
+        empty <- rig.read(UsageFilter.TaskOnly(t4))
+        _ <- assertIO(empty.window.isEmpty && empty.lastObserved.isEmpty && empty.units.isEmpty && empty.categories.isEmpty && empty.split == timeSplit(0, 0, 0, 0, 0))
+        // the existing reads still return what the test computes from its records
+        phases <- rig.usage.phases(rig.owner, UsageFilter.TaskOnly(t1))
+        _ <- assertIO(phases.phases.map(p => (p.phase, p.attempts, p.spans, p.wallMillis)) ==
+          List((UsagePhase.Work, 2L, 0L, ms(20) + ms(20)), (UsagePhase.Check, 0L, 1L, ms(5)), (UsagePhase.Await, 0L, 1L, ms(10))))
+        checks <- rig.usage.checks(rig.owner, UsageFilter.TaskOnly(t1))
+        _ <- assertIO(checks.checks == List(CheckUsage(Some("cq-fast"), AttemptState.Completed, 1, ms(5))))
+        attempts <- rig.usage.attempts(rig.owner, UsageFilter.TaskOnly(t1), None, None, 20)
+        _ <- assertIO(attempts.entries.map(_.attempt.id).toSet == Set(a1.id, a2.id))
+      } yield ()
+    }
+    "an explicit window selects by intersection, cuts figures and keeps true start and end" in { (repository: UsageRepository[IO], ledger: LedgerService[IO]) =>
+      val rig = new Rig(repository, ledger)
+      for {
+        _ <- rig.init()
+        before <- rig.ran(0, 20)
+        after <- rig.ran(40, 50)
+        parent <- rig.ran(10, 50)
+        child = rig.span(UsagePhase.Check, 20, 30, parent = Some(SpanParent.Attempt(parent.id)), check = Some("cq-fast"))
+        _ <- rig.put(child)
+        _ = rig.clock.now = ms(100)
+        report <- rig.read(window = Some((25, 40)))
+        _ <- assertIO(report.units.map(_.key).toSet == Set(keyOf(parent), keyOf(child)))
+        cut = rig.unit(report, keyOf(parent))
+        _ <- assertIO(cut.startedAt == ms(10) && cut.finishedAt.contains(ms(50)) && cut.duration == ms(15) && cut.ownTime == ms(10))
+        _ <- assertIO(rig.category(report, UnitKind.Attempt, UsagePhase.Work).total == ms(15))
+        other = new Rig(repository, ledger)
+        _ <- other.init()
+        governing <- other.begin(other.governing(0, attached = true))
+        _ <- other.ran(10, 30, parent = Some(governing))
+        _ <- other.ran(80, 90)
+        _ = other.clock.now = ms(200)
+        later <- other.read(window = Some((0, 60)))
+        _ <- assertIO(later.lastObserved.contains(ms(90)) && later.split == timeSplit(20, 0, 40, 0, 0) && splitSum(later.split) == windowLength(later))
+      } yield ()
+    }
+    "count the truncated waits that do not name the Task, with a cap" in { (repository: UsageRepository[IO], ledger: LedgerService[IO]) =>
+      val rig = new Rig(repository, ledger)
+      for {
+        _ <- rig.init()
+        named <- task(ledger, rig.owner, "Named")
+        unnamed <- task(ledger, rig.owner, "Unnamed")
+        wait = (blocked: ItemId, at: Long) => rig.span(UsagePhase.Await, at, at + 1, await = Some(AwaitedSpan(ItemId(rig.owner.project, Ledger.Questions, at), Set(blocked), true, 1)))
+        _ <- ZIO.foreachDiscard(List(wait(unnamed, 1), wait(unnamed, 3), wait(unnamed, 5), wait(named, 7)))(rig.put)
+        report <- rig.read(UsageFilter.TaskOnly(named))
+        _ <- assertIO(report.truncatedWaits == 3 && !report.truncatedWaitsAtLeast)
+        capped <- repository.read(rig.owner.project)(_.truncatedWaits(UsageFilter.TaskOnly(named), 2))
+        _ <- assertIO(capped == 2)
+        elsewhere <- rig.read(UsageFilter.ProjectAll())
+        _ <- assertIO(elsewhere.truncatedWaits == 0 && !elsewhere.truncatedWaitsAtLeast)
+      } yield ()
+    }
+    "page units in start order with the identity breaking a tie, and refuse bad pages" in { (repository: UsageRepository[IO], ledger: LedgerService[IO]) =>
+      val rig = new Rig(repository, ledger)
+      for {
+        _ <- rig.init()
+        attempts <- ZIO.foreach(List(0L, 10L, 10L, 20L, 30L))(start => rig.ran(start, start + 5))
+        expected = attempts.sortBy(a => (a.startedAt, "A:" + a.id.value)).map(keyOf)
+        _ = rig.clock.now = ms(100)
+        one <- rig.read(limit = 2)
+        two <- rig.read(limit = 2, after = one.next)
+        three <- rig.read(limit = 2, after = two.next)
+        _ <- assertIO(one.units.map(_.key) == expected.take(2) && two.units.map(_.key) == expected.slice(2, 4) && three.units.map(_.key) == expected.drop(4))
+        _ <- assertIO(one.next.nonEmpty && two.next.nonEmpty && three.next.isEmpty)
+        _ <- assertIO(one.categories == two.categories && one.window == two.window && one.split == two.split)
+        _ <- denied(rig.read(limit = 0))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(rig.read(limit = 201))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(rig.read(limit = 2, after = one.next.map(_.copy(after = UnitKey.Attempt(AttemptId(UUID.randomUUID()))))))(_.isInstanceOf[Fault.Invalid])
+        _ <- rig.ran(40, 45)
+        _ <- denied(rig.read(limit = 2, after = one.next))(_.isInstanceOf[Fault.Resync])
+      } yield ()
+    }
+    "freeze the read time across the pages of one listing" in { (repository: UsageRepository[IO], ledger: LedgerService[IO]) =>
+      val rig = new Rig(repository, ledger)
+      for {
+        _ <- rig.init()
+        governing <- rig.begin(rig.governing(0, attached = false))
+        checks = List.fill(3)(rig.span(UsagePhase.Check, 10, 10, AttemptState.Running, parent = Some(SpanParent.Attempt(governing.id)), check = Some("cq-fast")))
+        _ <- ZIO.foreachDiscard(checks)(rig.put)
+        _ = rig.clock.now = ms(25)
+        first <- rig.read(limit = 2)
+        _ <- assertIO(first.readTime == ms(25) && first.window.exists(w => w.from == 0 && w.until == ms(25)) && first.split.running == ms(15))
+        _ <- assertIO(first.units.filter(_.phase == UsagePhase.Check).forall(_.duration == ms(15)))
+        _ = rig.clock.now = ms(60)
+        second <- rig.read(limit = 2, after = first.next)
+        _ <- assertIO(second.readTime == ms(25) && second.window == first.window && second.split == first.split && second.categories == first.categories)
+        _ <- assertIO(second.units.nonEmpty && second.units.forall(_.duration == ms(15)))
+        fresh <- rig.read(limit = 2)
+        _ <- assertIO(fresh.readTime == ms(60) && fresh.window.exists(w => w.from == 0 && w.until == ms(60)) && fresh.split.running == ms(50))
+        _ <- denied(rig.read(limit = 2, after = first.next.map(_.copy(readTime = ms(61)))))(_.isInstanceOf[Fault.Invalid])
+      } yield ()
+    }
+    "bound and measurement" in { (repository: UsageRepository[IO], ledger: LedgerService[IO]) =>
+      val rig = new Rig(repository, ledger)
+      val groups = 9999
+      val sessionTwo = SessionId(UUID.randomUUID())
+      val governing = rig.attempt(0, UsagePhase.Govern, Role.Governor)
+      def at(value: Long): Long = value
+      def seed(from: Int, until: Int, tx: UsageTransaction): Unit = (from until until).foreach { i =>
+        val base = 100L * i
+        val in = if (i >= groups - 5) sessionTwo else rig.session
+        val review = Attempt(AttemptId(UUID.randomUUID()), rig.work.id, Some(governing.id), in, Role.Reviewer, Harness.Codex, "p", "m", "fixture-v1", at(base), UsagePhase.Review, None)
+        tx.putAttempt(review, rig.host.actor, 0)
+        tx.putOutcome(AttemptOutcome(RequestId(UUID.randomUUID()), review.id, AttemptState.Completed, at(base + 100), Nil, None), rig.host.actor, 0)
+        tx.putSpan(PhaseSpan(RequestId(UUID.randomUUID()), rig.work.id, in, UsagePhase.Check, at(base + 20), at(base + 60), AttemptState.Completed, Some("cq-fast"), None,
+          Some(SpanParent.Attempt(review.id))), rig.host.actor, 0)
+      }
+      for {
+        _ <- rig.init()
+        _ <- repository.transact(rig.owner.project) { tx =>
+          tx.putAttempt(governing, rig.host.actor, 0)
+          tx.putOutcome(AttemptOutcome(RequestId(UUID.randomUUID()), governing.id, AttemptState.Completed, 100L * groups, Nil, None), rig.host.actor, 0)
+          val extra = rig.attempt(0)
+          tx.putAttempt(extra.copy(startedAt = 0), rig.host.actor, 0)
+          tx.putOutcome(AttemptOutcome(RequestId(UUID.randomUUID()), extra.id, AttemptState.Completed, 50, Nil, None), rig.host.actor, 0)
+        }
+        _ <- ZIO.foreachDiscard((0 until groups by 1000).toList)(from => repository.transact(rig.owner.project)(tx => seed(from, math.min(groups, from + 1000), tx)))
+        _ = rig.clock.now = 10_000_000L
+        began = System.nanoTime()
+        report <- rig.read()
+        elapsed = (System.nanoTime() - began) / 1_000_000L
+        _ = println(s"unit-times-measure adapter=$adapter units=20000 readMillis=$elapsed")
+        total = 100L * groups
+        review = rig.category(report, UnitKind.Attempt, UsagePhase.Review)
+        _ <- assertIO(review.units == groups && review.total == total && review.ownTotal == 60L * groups)
+        check = rig.category(report, UnitKind.Span, UsagePhase.Check, Some("cq-fast"))
+        _ <- assertIO(check.units == groups && check.total == 40L * groups && check.ownTotal == 40L * groups)
+        govern = rig.category(report, UnitKind.Attempt, UsagePhase.Govern)
+        _ <- assertIO(govern.total == total && govern.ownTotal == 0 && rig.category(report, UnitKind.Attempt, UsagePhase.Work).total == 50)
+        _ <- assertIO(report.categories.map(_.units).sum == 20000 && report.window.contains(UnitWindow(0, total, false, false)))
+        _ <- assertIO(report.split == TimeSplit(total, 0, 0, 0, 0) && report.units.size == 200)
+        pageSize <- rig.read(limit = 200).map(_.units.size)
+        _ <- assertIO(pageSize == 200)
+        _ <- rig.ran(0, 10)
+        over <- rig.read().either
+        _ <- assertIO(over match { case Left(DomainFailure(_: Fault.Limit)) => true; case _ => false })
+        // the window of the closed form: five reviews and four checks of the groups 500 to 504, and the governing attempt
+        selected <- repository.read(rig.owner.project)(_.unitRecords(UsageFilter.ProjectAll(), Some((50030L, 50410L)), 20001).size)
+        _ <- assertIO(selected == 10)
+        cut <- usageUnits(rig, UsageFilter.ProjectAll(), Some(UnitWindowRequest(50030L, 50410L)))
+        _ <- assertIO(cut.units.size == 10)
+        sessionRead <- usageUnits(rig, UsageFilter.SessionOnly(sessionTwo), None)
+        _ <- assertIO(sessionRead.units.size == 10 && sessionRead.units.filter(_.phase == UsagePhase.Review).forall(u => u.parent.contains(keyOf(governing)) && u.ownTime == 60L))
+        _ <- assertIO(sessionRead.units.filter(_.phase == UsagePhase.Check).forall(_.ownTime == 40L))
+      } yield ()
+    }
+  }
+
+  private def usageUnits(rig: Rig, filter: UsageFilter, window: Option[UnitWindowRequest]): IO[Throwable, UnitReport] =
+    rig.usage.units(rig.owner, filter, window, 200, None)
 }
 
 final class UsageContractDummy extends UsageContractTest {
+  override protected def adapter: String = "Dummy"
   override def config = super.config.copy(activation = Activation(Repo -> Repo.Dummy))
 }
 
 final class UsageContractPostgres extends UsageContractTest {
+  override protected def adapter: String = "Postgres"
   override def config = super.config.copy(activation = Activation(Repo -> Repo.Prod))
 }

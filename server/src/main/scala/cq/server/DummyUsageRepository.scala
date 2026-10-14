@@ -134,9 +134,26 @@ private final class DummyUsageTransaction(initial: DummyUsageState) extends Usag
   // A wait is also seen by the Task it blocked at any time during the wait.
   private def matchesSpan(filter: UsageFilter, span: PhaseSpan): Boolean = matches(filter, span.assignment, span.session) ||
     ((filter, span.await) match { case (UsageFilter.TaskOnly(item), Some(wait)) => wait.blocked.contains(item); case _ => false })
-  override def truncatedWaits(filter: UsageFilter): Long = filter match {
-    case UsageFilter.TaskOnly(item) => state.spans.values.count(span => span.await.exists(_.truncated) && !matchesSpan(filter, span)).toLong
+  override def truncatedWaits(filter: UsageFilter, cap: Int): Long = filter match {
+    case UsageFilter.TaskOnly(_) => math.min(cap.toLong, state.spans.values.count(span => span.await.exists(_.truncated) && !matchesSpan(filter, span)).toLong)
     case _ => 0L
+  }
+  override def unitRecords(filter: UsageFilter, window: Option[(Long, Long)], limit: Int): List[UnitRecord] = {
+    def attemptIn(a: Attempt, outcome: Option[RecordedOutcome]): Boolean = window.forall { case (from, until) =>
+      a.startedAt < until && outcome.forall(_.value.finishedAt > from)
+    }
+    def spanIn(span: PhaseSpan): Boolean = window.forall { case (from, until) =>
+      span.startedAt < until && (span.state == AttemptState.Running || span.finishedAt > from)
+    }
+    val latest = state.outcomes.values.groupBy(_.value.attempt).map { case (attempt, all) => attempt -> all.maxBy(_.sequence) }
+    val attempts = state.attempts.valuesIterator.filter(matches(filter, _)).map(a => AttemptRecord(a, latest.get(a.id))).filter(r => attemptIn(r.attempt, r.outcome))
+    val spans = state.spans.valuesIterator.filter(span => matchesSpan(filter, span) && spanIn(span)).map(SpanRecord(_))
+    (attempts ++ spans).take(limit).toList
+  }
+  override def latestRecorded(session: SessionId): Option[Long] = {
+    val attempts = state.attempts.valuesIterator.filter(_.session == session).flatMap(a => a.startedAt :: latestOutcome(a.id).map(_.value.finishedAt).toList)
+    val spans = state.spans.valuesIterator.filter(_.session == session).flatMap(s => List(s.startedAt, s.finishedAt))
+    (attempts ++ spans).maxOption
   }
   override def checks(filter: UsageFilter, limit: Int): List[CheckTally] =
     state.spans.values.filter(value => value.phase == UsagePhase.Check && matches(filter, value.assignment, value.session)).groupBy(value => (value.check, value.state)).toList.map { case ((check, outcome), values) =>

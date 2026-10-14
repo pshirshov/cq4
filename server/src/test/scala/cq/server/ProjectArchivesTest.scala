@@ -255,7 +255,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         _ <- ZIO.attempt(Files.deleteIfExists(file))
         _ <- assertIO(restored.map(_.entries) == Right(manifest.entries))
         copy <- new PostgresUsageRepository(target).read(owner.project) { reader =>
-          (reader.span(running.id), reader.span(ended.id), reader.spans(UsageFilter.TaskOnly(blocked)), reader.spans(UsageFilter.TaskOnly(other)), reader.truncatedWaits(UsageFilter.TaskOnly(blocked)))
+          (reader.span(running.id), reader.span(ended.id), reader.spans(UsageFilter.TaskOnly(blocked)), reader.spans(UsageFilter.TaskOnly(other)), reader.truncatedWaits(UsageFilter.TaskOnly(blocked), Int.MaxValue))
         }
         _ <- assertIO(copy == (Some(refreshed), Some(ended), List(SpanTally(UsagePhase.Await, 1, 600, 1)), List(SpanTally(UsagePhase.Await, 2, 1100, 1)), 1L))
       } yield ()

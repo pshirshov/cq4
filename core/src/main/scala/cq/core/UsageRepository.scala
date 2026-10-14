@@ -7,6 +7,10 @@ final case class PhaseCost(phase: UsagePhase, total: CostTotal)
 final case class SpanTally(phase: UsagePhase, spans: Long, wallMillis: Long, running: Long)
 /** The runs of one check (absent for spans stored without a name) that ended in one state. */
 final case class CheckTally(check: Option[String], state: AttemptState, runs: Long, wallMillis: Long)
+/** One stored interval of a unit read: an attempt with its effective outcome, or a host span. */
+sealed trait UnitRecord
+final case class AttemptRecord(attempt: Attempt, outcome: Option[RecordedOutcome]) extends UnitRecord
+final case class SpanRecord(span: PhaseSpan) extends UnitRecord
 final case class UsageCursors(usage: Long, attempts: Long)
 object UsageCursors {
   /** The answer to a page of attempts asked to continue after an attempt the project does not hold. */
@@ -53,8 +57,15 @@ trait UsageReader {
   def span(id: RequestId): Option[PhaseSpan]
   /** One tally per phase that has a matching span. */
   def spans(filter: UsageFilter): List[SpanTally]
-  /** Under a Task filter, the waits with the truncation flag that the filter does not match and whose blocked items do not name the Task; otherwise zero. */
-  def truncatedWaits(filter: UsageFilter): Long
+  /** Under a Task filter, the waits with the truncation flag that the filter does not match and whose blocked items do not name the Task,
+    * counted up to `cap`; otherwise zero. */
+  def truncatedWaits(filter: UsageFilter, cap: Int): Long
+  /** At most `limit` attempts and spans together that match the filter and, when given, intersect the window (from, until): the row starts
+    * before `until` and has no recorded end or ends after `from`. A Running host span and a Running wait have no recorded end for this rule.
+    * Under a Task filter the spans include the waits whose blocked items contain the Task. No order is promised. */
+  def unitRecords(filter: UsageFilter, window: Option[(Long, Long)], limit: Int): List[UnitRecord]
+  /** The maximum start, effective outcome finish and span start and finish over all attempts and spans of the session; none for a session with no record. */
+  def latestRecorded(session: SessionId): Option[Long]
   /** At most `limit` tallies of Check spans, one per check name and state, ordered by name (absent first, UTF-8 byte order) and then state name. */
   def checks(filter: UsageFilter, limit: Int): List[CheckTally]
 }

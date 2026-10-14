@@ -104,6 +104,40 @@ Unobserved time. A Running wait says nothing about the time after its finish tim
 
 Not recorded: a worker's check run whose start never reached the server when its supervisor died before sealing the worker's publication (their evidence is not published either; a delivered start is closed as Unknown by recovery); the finish of an integration that only `cq job upload` resolved after its supervisor died during the Git update (recovery closes its Running span as Unknown at the time it runs); an attempt reconciled by recovery ends at the recovery time, not at its job's settlement. Attempts registered before the settle-time rule keep their publication time as `finishedAt`, so historical Work wall time includes the worker's checks.
 
+## Unit times
+
+`UsageSelection.Units` (`UsageService.units`) reads the units of a scope with total and own time, category totals and a coarse split of elapsed time (Decision 14, rules 1 to 6, 9, 10 and 14; Decision 16). It is computed at read time from one repository snapshot by `TimeAccounting.compute`; nothing is stored. Measurements are in [unit-times-read.md](../validation/unit-times-read.md).
+
+**Units and how each ends.**
+
+| Record | Class | End |
+| --- | --- | --- |
+| Attempt with an effective outcome | governing when it has no parent and the Governor role, otherwise other | closed at the outcome's `finishedAt` |
+| Attempt without an outcome, observed | as above | running: observed to the read time |
+| Attempt without an outcome, not observed (attached governing attempt) | governing | open: observed to the latest recorded instant of its session |
+| Check, Integrate or Combine span, terminal | other | closed at `finishedAt` |
+| Check, Integrate or Combine span, Running | other | running: observed to the read time |
+| Await span, terminal | operator wait | closed at `finishedAt` |
+| Await span, Running | operator wait | observed to its `finishedAt`, the last observation |
+
+Finish times are host-clock values; the read time is a server-clock value. A host whose clock differs from the server's moves a Running unit's figures by that difference.
+
+**Categories and own time.** A category is the unit kind (attempt or span), the phase and, on a Check span, the check name; spans without a name are one category. The kind is part of the key because a conflict resolver's attempt and a combination preparation's span both have the phase Combine. A category reports its units, its total (sum of durations) and its own total. **Own time is structural**: a unit's duration minus the union of its direct children's intervals clipped to it. It is not inference, working or waiting time and bounds none of them, and the reply has no inference figure and no tool time. **Totals of different categories overlap when work runs in parallel or nested and must not be added.** A parent that is not among the selected units counts as none, so a child under a Task filter whose governing attempt is outside the scope is listed with its stored parent and own time equal to its duration.
+
+**The five states.** The window is partitioned into running (some unit other than a governing attempt and other than an operator wait is in progress), waiting for the operator, governing session only, unobserved (the tail of an open interval) and idle. Each instant has exactly one state, so the five figures sum to the window length. They are the only figures of the reply that add up.
+
+**Windows.** Without an explicit window the window runs from the earliest start to the latest observed end of the scope's units; a scope without units has no window and all figures are zero. An explicit window (`0 <= from <= until`) is part of the selection: a row is selected when it starts before `until` and has no recorded end or ends after `from`; a Running host span and a Running wait have no recorded end for this rule. Durations, own times, category totals and the split count only the part inside the window; the listing keeps each unit's true start and recorded end.
+
+**Latest recorded instant of a session.** For each session with an open attached governing attempt in the selection the reader returns the maximum start, effective outcome finish and span start and finish over all attempts and spans of that session, taken over the whole session and not over the selected rows. It is not under the bound.
+
+**Bound.** One read covers at most 20,000 units (`UsageService.MaxUnits`), attempts and spans together after the window predicate. The service asks the reader for 20,001 rows; when they come back it builds nothing and fails with `Limit`. An explicit window is the way out. PostgreSQL runs one `SELECT ... FROM (attempt rows UNION ALL span rows) u LIMIT ?` without ORDER BY; no index, stored column or projection is added.
+
+**Paging and the read time.** The whole computed set is sorted in memory by start time and then identity and the page (1 to 200) is cut from it. The continuation holds the last unit of the page before, the audit cursor and the read time of the first page, whole or not at all. A read without a continuation takes the read time from the server clock and returns it. A read with a continuation is computed at the read time it carries, so the pages of one listing agree on window, split, category totals and per-unit figures while the cursor is unchanged; a changed cursor is `Resync`, a read time after the server clock or an `after` that is no unit of the set is `Invalid`.
+
+**Truncated waits.** Under a Task filter the reply counts the project's waits with the truncation flag that the filter does not select and whose blocked items do not name the Task. The count is capped at 20,000 (`UsageService.MaxTruncatedWaits`) and reports "at least" at the cap; under other filters it is zero.
+
+**Residual gap.** Work whose start has not reached the server (the host died or the server was unreachable before the start was delivered) is absent from a read; the time is classified by what the snapshot holds (for example governing session only or unobserved), and appears once the start is delivered.
+
 ## Storage, access and retention
 
 The initial PostgreSQL DDL includes indexes for assignment membership, cohort, evaluation/scenario, session, attempt and source position. Writes serialize on a separate project audit cursor, not the ledger change cursor. Ingestion accesses the target meter, relevant observation/head, and that meter's projection. It does not reload item content or update unrelated task/cohort aggregates. Meter token projections have a fixed shape. Monetary projections use separate rows keyed by meter, currency, cost basis and pricing version. Ingestion updates only the previous/new contribution groups in the same audit transaction; corrections remove zero-measurement groups and retain measured zero amounts. Cumulative cost changes only with the effective latest observation. Historical cumulative corrections remain audit evidence without changing the current cost.
@@ -127,5 +161,7 @@ CQ retains numerical records, frozen membership, corrections and published artif
 - Phase reports: attempts with finished wall time and running attempts apart, bounded cost groups, and host spans added to their phase's span count and wall time once per identity under session, task and project filters.
 - Check runs per check name and state under session, task and project filters, equal to the Check phase row, with spans without a name as one group, refused names, and a replayed span counted once.
 - Host spans registered Running and finished once: a Check span Running at 10 s (one Running span, no wall time), finished at 40 s (wall time 30 s, no Running span), its start replayed afterwards (nothing changes), each of the five registration rules with the cursor before and after, and an Integrate and a Combine span the same way; `HostSpansLocal` runs the host recording sites against an in-process server and recovery's closing of a span whose host ended before its finish.
+
+- Unit times: the scenarios S1 to S7 of Decision 14, parallel units and children, closed and running waits, every filter variant, explicit windows, truncated waits, paging with a frozen read time, and a project of exactly 20,000 units read in closed form, refused with `Limit` after one more.
 
 These are deterministic accounting scenarios. They are not real Claude/Codex/Pi consumer evaluations, collector-completeness evidence or an efficiency claim.

@@ -20,6 +20,10 @@ trait UsageService[F[_, _]] {
   def summary(scope: Scope, filter: UsageFilter): F[Throwable, UsageReport]
   def phases(scope: Scope, filter: UsageFilter): F[Throwable, PhaseReport]
   def checks(scope: Scope, filter: UsageFilter): F[Throwable, CheckReport]
+  /** Units of a scope with total and own time, category totals and the coarse split of elapsed time (Decision 14, rule 14; Decision 16).
+    * One snapshot; at most `UsageService.MaxUnits` units are read, beyond which the read fails with `Fault.Limit`. A read with a continuation is
+    * computed at the read time the continuation carries. */
+  def units(scope: Scope, filter: UsageFilter, window: Option[UnitWindowRequest], limit: Int, continuation: Option[UnitContinuation]): F[Throwable, UnitReport]
   def attempts(scope: Scope, filter: UsageFilter, after: Option[AttemptId], snapshot: Option[Long], limit: Int): F[Throwable, AttemptPage]
   def outcomes(scope: Scope, attempt: AttemptId, after: Long, limit: Int): F[Throwable, OutcomePage]
   def audit(scope: Scope, filter: UsageFilter, after: Long, limit: Int): F[Throwable, UsagePage]
@@ -27,6 +31,10 @@ trait UsageService[F[_, _]] {
 
 object UsageService {
   val MaxBlocked: Int = AwaitedSpans.MaxBlocked
+  /** The most units (attempts and spans together, after the window predicate) one unit read covers. */
+  val MaxUnits: Int = 20000
+  /** The cap of the truncated-wait count of a unit read; at the cap the reply says "at least". */
+  val MaxTruncatedWaits: Int = 20000
 
   final class Impl[F[+_, +_]: Error2](repository: UsageRepository[F], ledger: LedgerService[F], clock: Clock) extends UsageService[F] {
     import LedgerPolicy.invalid
@@ -295,7 +303,7 @@ object UsageService {
         val span = spans.getOrElse(phase, SpanTally(phase, 0, 0, 0))
         PhaseUsage(phase, tally.attempts, span.spans, tally.running, span.running, tally.open, Math.addExact(tally.wallMillis, span.wallMillis), totals.getOrElse(phase, UsageMath.zeroTotals),
           costs.take(ReadBatch).filter(_.phase == phase).map(_.total))
-      }, costs.size > ReadBatch, reader.truncatedWaits(value), reader.cursor)
+      }, costs.size > ReadBatch, reader.truncatedWaits(value, Int.MaxValue), reader.cursor)
     }
 
     override def checks(scope: Scope, value: UsageFilter): F[Throwable, CheckReport] = repository.read(scope.project) { reader =>
@@ -303,6 +311,107 @@ object UsageService {
       val tallies = reader.checks(value, ReadBatch + 1)
       CheckReport(tallies.take(ReadBatch).map(t => CheckUsage(t.check, t.state, t.runs, t.wallMillis)), tallies.size > ReadBatch, reader.cursor)
     }
+
+    private def attemptUnit(record: AttemptRecord): (TimeAccounting.TimedUnit, UnitTime, UnitCategory) = {
+      val a = record.attempt
+      val governing = a.parent.isEmpty && a.role == Role.Governor
+      val end = record.outcome match {
+        case Some(outcome) => TimeAccounting.End.Closed(outcome.value.finishedAt)
+        case None if AttemptObservation.observed(a) => TimeAccounting.End.Running
+        case None => TimeAccounting.End.OpenAttached(a.session.value.toString)
+      }
+      val category = UnitCategory(UnitKind.Attempt, a.phase, None)
+      val key = UnitKey.Attempt(a.id)
+      val unit = TimeAccounting.TimedUnit("A:" + a.id.value, category.toString, a.startedAt, a.parent.map(p => "A:" + p.value), end,
+        if (governing) TimeAccounting.UnitClass.Governing else TimeAccounting.UnitClass.Other)
+      (unit, UnitTime(key, a.phase, None, a.assignment, a.session, a.parent.map(UnitKey.Attempt(_)), record.outcome.fold(AttemptState.Running)(_.value.state), a.startedAt, None, 0, 0, 0), category)
+    }
+
+    private def spanUnit(record: SpanRecord): (TimeAccounting.TimedUnit, UnitTime, UnitCategory) = {
+      val span = record.span
+      val running = span.state == AttemptState.Running
+      val wait = span.phase == UsagePhase.Await
+      val end =
+        if (!running) TimeAccounting.End.Closed(span.finishedAt)
+        else if (wait) TimeAccounting.End.WaitRunning(span.finishedAt)
+        else TimeAccounting.End.Running
+      val category = UnitCategory(UnitKind.Span, span.phase, span.check)
+      val parent = span.parent.map {
+        case SpanParent.Attempt(id) => UnitKey.Attempt(id)
+        case SpanParent.Span(id) => UnitKey.Span(id)
+      }
+      val parentId = parent.map {
+        case UnitKey.Attempt(id) => "A:" + id.value
+        case UnitKey.Span(id) => "S:" + id.value
+      }
+      val unit = TimeAccounting.TimedUnit("S:" + span.id.value, category.toString, span.startedAt, parentId, end,
+        if (wait) TimeAccounting.UnitClass.OperatorWait else TimeAccounting.UnitClass.Other)
+      (unit, UnitTime(UnitKey.Span(span.id), span.phase, span.check, span.assignment, span.session, parent, span.state, span.startedAt, None, 0, 0, 0), category)
+    }
+
+    private def unitId(key: UnitKey): String = key match {
+      case UnitKey.Attempt(id) => "A:" + id.value
+      case UnitKey.Span(id) => "S:" + id.value
+    }
+
+    override def units(scope: Scope, value: UsageFilter, window: Option[UnitWindowRequest], limit: Int, continuation: Option[UnitContinuation]): F[Throwable, UnitReport] =
+      repository.read(scope.project) { reader =>
+        filter(scope, value)
+        invalid(limit > 0 && limit <= ReadBatch, "Invalid unit page size")
+        window.foreach(w => invalid(w.from >= 0 && w.from <= w.until, "Invalid unit window"))
+        val cursor = reader.cursor
+        val now = clock.millis()
+        val readTime = continuation match {
+          case Some(c) =>
+            invalid(c.readTime >= 0 && c.readTime <= now, "The read time of a unit continuation lies after the server clock")
+            if (c.cursor != cursor) throw DomainFailure(Fault.Resync("Usage snapshot changed; restart unit listing"))
+            c.readTime
+          case None => now
+        }
+        val records = reader.unitRecords(value, window.map(w => (w.from, w.until)), UsageService.MaxUnits + 1)
+        if (records.size > UsageService.MaxUnits)
+          throw DomainFailure(Fault.Limit(s"A unit read covers at most ${UsageService.MaxUnits} units; narrow the filter or give a window"))
+        val built = records.map {
+          case record: AttemptRecord => attemptUnit(record)
+          case record: SpanRecord => spanUnit(record)
+        }
+        val timed = built.map(_._1)
+        val sessions = timed.collect { case TimeAccounting.TimedUnit(_, _, _, _, TimeAccounting.End.OpenAttached(session), _) => session }.distinct
+        val latest = sessions.flatMap(session => reader.latestRecorded(SessionId(java.util.UUID.fromString(session))).map(session -> _)).toMap
+        val result = TimeAccounting.compute(TimeAccounting.Input(timed, readTime, latest, window.map(w => (w.from, w.until))))
+        val byId = built.map { case (unit, time, category) => unit.id -> (time, category) }.toMap
+        val listed = result.units.map { t =>
+          val (time, _) = byId(t.id)
+          time.copy(finishedAt = t.end, observedUntil = t.observedEnd, duration = t.duration, ownTime = t.ownTime)
+        }.sortBy(t => (t.startedAt, unitId(t.key)))
+        val categories = result.categories.toList.map { case (name, total) =>
+          val category = built.collectFirst { case (unit, _, c) if unit.category == name => c }.get
+          UnitCategoryTime(category, total.units.toLong, total.total, total.ownTotal)
+        }.sortBy(c => (c.category.kind.toString, c.category.phase.toString, c.category.check.getOrElse("")))
+        val start = continuation match {
+          case Some(c) =>
+            val index = listed.indexWhere(_.key == c.after)
+            invalid(index >= 0, "The unit a page continues after is not a unit of this read")
+            index + 1
+          case None => 0
+        }
+        val page = listed.slice(start, start + limit)
+        val more = start + limit < listed.size
+        val truncated = reader.truncatedWaits(value, UsageService.MaxTruncatedWaits)
+        val split = result.split
+        UnitReport(
+          readTime,
+          result.window.map(w => UnitWindow(w.from, w.until, w.open, w.explicit)),
+          result.lastObserved,
+          TimeSplit(split.running, split.waiting, split.governing, split.unobserved, split.idle),
+          categories,
+          page.toList,
+          truncated,
+          value.isInstanceOf[UsageFilter.TaskOnly] && truncated >= UsageService.MaxTruncatedWaits,
+          cursor,
+          if (more) page.lastOption.map(last => UnitContinuation(last.key, cursor, readTime)) else None
+        )
+      }
 
     private def costPage(reader: UsageReader, filter: UsageFilter, after: Option[CostGroup], limit: Int): CostPage = {
       val page = reader.costs(filter, after, limit)
