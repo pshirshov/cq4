@@ -225,12 +225,51 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
       spanFilterSql(filter) + " GROUP BY t.phase")(s => { bindSpanFilter(s, filter); () })(
       r => SpanTally(UsagePhase.parse(r.getString(1)).get, r.getLong(2), r.getBigDecimal(3).longValueExact(), r.getLong(4)))
 
-  override def truncatedWaits(filter: UsageFilter): Long = filter match {
+  override def truncatedWaits(filter: UsageFilter, cap: Int): Long = filter match {
     case UsageFilter.TaskOnly(_) =>
-      sql.query("SELECT count(*) FROM cq_usage_spans t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ? AND t.phase = 'Await' AND t.body->'await'->>'truncated' = 'true' AND NOT (" +
-        spanFilterSql(filter).stripPrefix(" AND ") + ")")(s => { bindSpanFilter(s, filter); () })(_.getLong(1)).head
+      sql.query("SELECT count(*) FROM (SELECT 1 FROM cq_usage_spans t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ? AND t.phase = 'Await' AND t.body->'await'->>'truncated' = 'true' AND NOT (" +
+        spanFilterSql(filter).stripPrefix(" AND ") + ") LIMIT ?) c")(s => { s.setInt(bindSpanFilter(s, filter), cap); () })(_.getLong(1)).head
     case _ => 0L
   }
+
+  // One query over the attempt rows and the span rows of the filter, with the window predicate and the row limit, and no ORDER BY.
+  override def unitRecords(filter: UsageFilter, window: Option[(Long, Long)], limit: Int): List[UnitRecord] = {
+    val attemptWindow = window.fold("")(_ => " AND (t.body->>'startedAt')::bigint < ? AND (t.effective_outcome IS NULL OR (t.effective_outcome->'value'->>'finishedAt')::bigint > ?)")
+    val spanWindow = window.fold("")(_ => " AND t.started_at < ? AND (t.body->>'state' = 'Running' OR t.finished_at > ?)")
+    val query = "SELECT u.kind, u.body, u.outcome FROM (" +
+      "SELECT 0 AS kind, t.body::text AS body, t.effective_outcome::text AS outcome FROM cq_usage_attempts t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ?" +
+      filterSql(filter) + attemptWindow +
+      " UNION ALL SELECT 1, t.body::text, NULL FROM cq_usage_spans t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ?" +
+      spanFilterSql(filter) + spanWindow + ") u LIMIT ?"
+    sql.query(query) { s =>
+      var index = bindFilter(s, filter)
+      window.foreach { case (from, until) => s.setLong(index, until); s.setLong(index + 1, from); index += 2 }
+      s.setObject(index, project.value); index += 1
+      filter match {
+        case _: UsageFilter.ProjectAll => ()
+        case UsageFilter.TaskOnly(item) => s.setString(index, item.ledger.toString); s.setLong(index + 1, item.number); s.setString(index + 2, blocked(item)); index += 3
+        case UsageFilter.CohortOnly(id) => s.setObject(index, id); index += 1
+        case UsageFilter.SessionOnly(id) => s.setObject(index, id.value); index += 1
+        case UsageFilter.EvaluationOnly(run, scenario) =>
+          s.setString(index, run); index += 1
+          scenario.foreach { value => s.setString(index, value); index += 1 }
+      }
+      window.foreach { case (from, until) => s.setLong(index, until); s.setLong(index + 1, from); index += 2 }
+      s.setInt(index, limit)
+    } { r =>
+      if (r.getInt(1) == 0) AttemptRecord(Wire.decode(Attempt_JsonCodec, r.getString(2)), Option(r.getString(3)).map(Wire.decode(RecordedOutcome_JsonCodec, _)))
+      else SpanRecord(Wire.decode(PhaseSpan_JsonCodec, r.getString(2)))
+    }
+  }
+
+  override def latestRecorded(session: SessionId): Option[Long] =
+    sql.query("SELECT max(v) FROM (" +
+      "SELECT (t.body->>'startedAt')::bigint AS v FROM cq_usage_attempts t WHERE t.project_id = ? AND t.session_id = ? " +
+      "UNION ALL SELECT (t.effective_outcome->'value'->>'finishedAt')::bigint FROM cq_usage_attempts t WHERE t.project_id = ? AND t.session_id = ? AND t.effective_outcome IS NOT NULL " +
+      "UNION ALL SELECT t.started_at FROM cq_usage_spans t WHERE t.project_id = ? AND t.session_id = ? " +
+      "UNION ALL SELECT t.finished_at FROM cq_usage_spans t WHERE t.project_id = ? AND t.session_id = ?) m") { s =>
+      (0 until 4).foreach { k => s.setObject(2 * k + 1, project.value); s.setObject(2 * k + 2, session.value) }
+    }(r => { val v = r.getLong(1); if (r.wasNull) None else Some(v) }).headOption.flatten
 
   override def checks(filter: UsageFilter, limit: Int): List[CheckTally] =
     sql.query("SELECT g.name, g.state, g.runs, g.wall FROM (SELECT t.body->>'check' AS name, t.body->>'state' AS state, count(*) AS runs, sum(t.finished_at - t.started_at) AS wall " +

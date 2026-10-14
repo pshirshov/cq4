@@ -90,6 +90,35 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         } yield ()
     }
 
+    "serve the unit times through the usage selection with the authorization of the phase report" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val auth = authorization(Now)
+        val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
+        val project = ProjectId(UUID.randomUUID())
+        val other = ProjectId(UUID.randomUUID())
+        val collector = Scope(project, Actor("collector", SessionId(UUID.randomUUID()), Role.Collector))
+        val assignment = Assignment(AssignmentId(UUID.randomUUID()), project, Set.empty, Attribution.Unattributed, None, None)
+        val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, collector.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None)
+        val tool = new McpSchemas().tools.find(_.name == "usage").get
+        val input = io.circe.parser.parse(s"""{"project":{"value":"${project.value}"},"selection":{"Units":{"filter":{"SessionOnly":{"id":{"value":"${collector.actor.session.value}"}}},"window":null,"limit":10,"continuation":null}}}""").toTry.get
+        for {
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "units")))
+          _ <- usage.assign(collector, assignment)
+          _ <- usage.start(collector, attempt)
+          command <- ZIO.fromEither(tool.decode(input))
+          result <- application.execute(root, command)
+          _ <- assertIO(result match {
+            case Result.UsageUnits(report) => report.units.map(u => (u.key, u.phase, u.state)) == List((UnitKey.Attempt(attempt.id), UsagePhase.Govern, AttemptState.Running)) && report.window.nonEmpty
+            case _ => false
+          })
+          direct <- application.execute(root, Command.Usage(UsageInput(project, UsageSelection.Units(UsageFilter.ProjectAll(), None, 10, None))))
+          _ <- assertIO(direct match { case Result.UsageUnits(report) => report.units.size == 1 && report.categories.size == 1; case _ => false })
+          crossed <- application.execute(root, Command.Usage(UsageInput(other, UsageSelection.Units(UsageFilter.ProjectAll(), None, 10, None))))
+          _ <- assertIO(crossed match { case Result.Failed(_) => true; case _ => false })
+        } yield ()
+    }
+
     "serve the command and agent catalogs through the typed read path to project readers" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)
