@@ -100,22 +100,33 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         val collector = Scope(project, Actor("collector", SessionId(UUID.randomUUID()), Role.Collector))
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), project, Set.empty, Attribution.Unattributed, None, None)
         val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, collector.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None)
-        val tool = new McpSchemas().tools.find(_.name == "usage").get
-        val input = io.circe.parser.parse(s"""{"project":{"value":"${project.value}"},"selection":{"Units":{"filter":{"SessionOnly":{"id":{"value":"${collector.actor.session.value}"}}},"window":null,"limit":10,"continuation":null}}}""").toTry.get
+        val grant = auth.grant(root, GrantRequest(project, Actor("worker", SessionId(UUID.randomUUID()), Role.Worker), Now + 10000)).value
+        val transport = new Transport(application, auth, AccessConfig(Token, "http://localhost"), new McpSchemas(), null, null, null, null)
+        def mcp(arguments: String): zio.Task[io.circe.Json] = {
+          import org.http4s.{Header, Method, Request, Uri}
+          import zio.interop.catz.*
+          val body = s"""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"usage","arguments":$arguments}}"""
+          transport.routes(null).orNotFound.run(Request[zio.Task](Method.POST, Uri.unsafeFromString("/mcp")).withEntity(body)
+            .putHeaders(Header.Raw(org.typelevel.ci.CIString("Authorization"), "Bearer " + grant))).flatMap(_.as[String])
+            .map(io.circe.parser.parse(_).fold(throw _, identity))
+        }
+        def units(target: ProjectId): String = s"""{"project":{"value":"${target.value}"},"selection":{"Units":{"filter":{"SessionOnly":{"id":{"value":"${collector.actor.session.value}"}}},"window":null,"limit":10,"continuation":null}}}"""
         for {
           _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "units")))
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(other, "http://localhost", "other")))
           _ <- usage.assign(collector, assignment)
           _ <- usage.start(collector, attempt)
-          command <- ZIO.fromEither(tool.decode(input))
-          result <- application.execute(root, command)
-          _ <- assertIO(result match {
+          served <- mcp(units(project))
+          content = served.hcursor.downField("result").downField("structuredContent")
+          _ <- assertIO(served.hcursor.downField("result").get[Boolean]("isError") == Right(false))
+          reply <- ZIO.fromEither(Result_JsonCodec.decode(baboon.runtime.shared.BaboonCodecContext.Default, content.focus.get)).mapError(e => new AssertionError(e.toString))
+          _ <- assertIO(reply match {
             case Result.UsageUnits(report) => report.units.map(u => (u.key, u.phase, u.state)) == List((UnitKey.Attempt(attempt.id), UsagePhase.Govern, AttemptState.Running)) && report.window.nonEmpty
             case _ => false
           })
-          direct <- application.execute(root, Command.Usage(UsageInput(project, UsageSelection.Units(UsageFilter.ProjectAll(), None, 10, None))))
-          _ <- assertIO(direct match { case Result.UsageUnits(report) => report.units.size == 1 && report.categories.size == 1; case _ => false })
-          crossed <- application.execute(root, Command.Usage(UsageInput(other, UsageSelection.Units(UsageFilter.ProjectAll(), None, 10, None))))
-          _ <- assertIO(crossed match { case Result.Failed(_) => true; case _ => false })
+          crossed <- mcp(units(other))
+          _ <- assertIO(crossed.hcursor.downField("result").get[Boolean]("isError") == Right(true))
+          _ <- assertIO(crossed.hcursor.downField("result").downField("structuredContent").downField("Failed").downField("fault").downField("Denied").succeeded)
         } yield ()
     }
 
